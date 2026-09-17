@@ -45,6 +45,34 @@ def test_capability_discovery_is_cached():
     assert http.calls == 1
 
 
+def test_loaded_runtime_context_wins_over_trained_maximum():
+    # The serving window (/api/ps) can be far smaller than the trained
+    # maximum (/api/show model_info); planning must use the smaller one.
+    class HTTP:
+        def get_json(self, path, **kwargs):
+            assert path == '/api/ps'
+            return {'models': [{'name': 'qwen3:8b', 'context_length': 4096}]}
+        def post_json(self, path, payload, **kwargs):
+            return {'model_info': {'qwen3.context_length': 40960}}
+    engine = OllamaEngine(EngineSettings(model='qwen3:8b'), http=HTTP())
+    caps = engine.capabilities()
+    assert caps.context_length == 4096
+    assert caps.context_source == 'server'
+    assert any('/api/ps' in note for note in caps.notes)
+
+
+def test_ps_without_loaded_model_falls_back_to_show():
+    class HTTP:
+        def get_json(self, path, **kwargs):
+            return {'models': []}
+        def post_json(self, path, payload, **kwargs):
+            return {'model_info': {'qwen3.context_length': 40960}}
+    engine = OllamaEngine(EngineSettings(model='qwen3:8b'), http=HTTP())
+    caps = engine.capabilities()
+    assert caps.context_length == 40960
+    assert caps.context_source == 'server'
+
+
 def test_pure_budget_subtracts_all_reservations():
     budget = compute_input_budget(context_length=4096, prompt_tokens=400,
         context_file_tokens=200, reserved_output_tokens=512, max_tokens_per_chunk=3000)

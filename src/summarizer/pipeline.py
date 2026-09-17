@@ -85,7 +85,6 @@ class PipelineResult:
     @property
     def engine_model(self) -> str:
         return self.engine.model
-        return self.engine.model
 
     @property
     def engine_backend(self) -> str:
@@ -258,7 +257,7 @@ class Pipeline:
             endpoint=engine.endpoint,
             boundary=boundary,
             strategy=aggregation.name,
-            chunk_count=decision.chunk_count,
+            chunk_count=len(chunk_provenance) if chunk_provenance else 1,
             warnings=warnings,
             duration_seconds=duration,
             chunk_provenance=chunk_provenance,
@@ -294,6 +293,7 @@ class Pipeline:
                 hint="expected one of: plain, markdown, json",
             )
         engine = self.resolve_engine(opts)
+        max_output_tokens = getattr(engine, "max_tokens", self.config.engine.max_tokens)
         capabilities = self._safe_capabilities(engine)
         context = self._read_context(opts.context_file)
 
@@ -312,6 +312,7 @@ class Pipeline:
             document.content,
             capabilities=capabilities,
             settings=self.config.chunking,
+            max_output_tokens=max_output_tokens,
             profile=profile,
             config_context_length=self.config.engine.context_length,
             explicit_unit=opts.chunk_strategy or self.config.defaults.chunk_strategy,
@@ -456,6 +457,7 @@ class Pipeline:
             capabilities,
             self.config.chunking,
             reduce_profile,
+            max_output_tokens=getattr(engine, "max_tokens", self.config.engine.max_tokens),
             config_context_length=self.config.engine.context_length,
         ).usable_input_tokens
         summaries = mr.consolidate(
@@ -534,6 +536,7 @@ class Pipeline:
             document.content,
             capabilities=caps,
             settings=self.config.chunking,
+            max_output_tokens=getattr(engine, "max_tokens", self.config.engine.max_tokens),
             profile=profile,
             config_context_length=self.config.engine.context_length,
             explicit_unit=opts.chunk_strategy or self.config.defaults.chunk_strategy,

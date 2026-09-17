@@ -110,7 +110,7 @@ def parse_json_strict(text: str) -> tuple[bool, Any]:
     if candidate.startswith("```"):
         first = candidate.find("\n")
         last = candidate.rfind("```")
-        if first != -1 and last > first:
+        if first != -1 and last > first and not candidate[last + 3:].strip():
             candidate = candidate[first + 1 : last].strip()
     try:
         value = json.loads(candidate)

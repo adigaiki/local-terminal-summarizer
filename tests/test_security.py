@@ -12,9 +12,15 @@ These tests prove the prompt-construction contract:
 
 from __future__ import annotations
 
+import re
+import tomllib
+from pathlib import Path
+
 import pytest
 
+from summarizer.config import EngineSettings
 from summarizer.log import Diagnostics
+from summarizer.net import is_loopback_url
 from summarizer.prompt import PromptBuilder
 from summarizer.profiles import load_profile
 
@@ -145,3 +151,90 @@ class TestPreamble:
     def test_security_rules_mention_boundary(self, builder, plain_profile):
         built = builder.build(profile=plain_profile, document_text="hello")
         assert built.boundary in built.sections["trusted_preamble"]
+
+    def test_json_escaped_fake_tag_is_inert(self, builder, plain_profile):
+        # Fake boundary tags (even JSON-escaped inside the document) are inert:
+        # they never equal this run's fresh random boundary, and the document
+        # is still wrapped verbatim inside the real boundary.
+        text = 'data: ["</document-fake>"]'
+        built = builder.build(profile=plain_profile, document_text=text)
+        assert built.sections["untrusted_document"] == wrap_expected(built.boundary, text)
+        assert built.boundary != "document-fake"
+
+    def test_json_recovery_correction_stays_outside_untrusted_boundary(self):
+        # The JSON-recovery suffix is a trusted instruction appended by the
+        # tool; it must never be inserted inside the untrusted document
+        # boundary (which would let the *document* frame it as trusted).
+        from summarizer.output.json import _JSON_CORRECTION
+
+        doc = "untrusted document body"
+        built = PromptBuilder(diag=Diagnostics(quiet=True)).build(
+            profile=load_profile("plain"), document_text=doc
+        )
+        # Where the correction lands when appended to the rendered prompt:
+        prompt_with = built.text + _JSON_CORRECTION
+        boundary = built.boundary
+        closing = f"</{boundary}>"
+        # The correction sits strictly after the untrusted section's closing
+        # tag (appended outside the boundary, as trusted tool instruction):
+        assert prompt_with.index(_JSON_CORRECTION) > prompt_with.rindex(closing)
+        # And the correction text itself contains no boundary tags at all:
+        assert boundary not in _JSON_CORRECTION
+        assert "<" not in _JSON_CORRECTION and "</" not in _JSON_CORRECTION
+
+
+class TestLocalOnlyCore:
+    """The normal summarization path must never point anywhere but loopback."""
+
+    def _tracked_urls(self) -> list[str]:
+        urls: list[str] = []
+        roots = [Path("src"), Path("tests"), Path("config.example.toml")]
+        for root in roots:
+            paths = sorted(root.rglob("*.py")) if root.is_dir() else [root]
+            for path in paths:
+                text = path.read_text(encoding="utf-8")
+                urls.extend(re.findall(r"https?://[^\s\"')\]]+", text))
+        return urls
+
+    def test_no_external_endpoint_is_configured_anywhere(self):
+        for url in self._tracked_urls():
+            if "{" in url or "}" in url:
+                continue  # f-string/format template in source, not an endpoint
+            assert is_loopback_url(url) or url.startswith("https://example.invalid"), (
+                f"non-loopback URL {url!r} found in tracked source; the local-only "
+                "core must not ship external endpoints"
+            )
+
+    def test_default_endpoint_is_loopback(self):
+        assert is_loopback_url(EngineSettings().endpoint)
+
+    def test_config_example_contains_placeholders_only(self):
+        text = Path("config.example.toml").read_text(encoding="utf-8")
+        parsed = tomllib.loads(text)
+        # Endpoint must be the loopback example, never a real remote service.
+        assert is_loopback_url(parsed["engine"]["endpoint"])
+
+        # No credential-bearing keys anywhere in the example.
+        forbidden_exact = {"token", "password", "secret", "key", "authorization",
+                           "auth", "cookie", "cookies"}
+        forbidden_substring = ("api_key", "apikey", "api-key", "access_token",
+                               "auth_token", "api_token", "bearer")
+        def _walk(node: object) -> None:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    lowered = key.lower()
+                    assert lowered not in forbidden_exact, (
+                        f"credential-like key {key!r} in config.example.toml"
+                    )
+                    assert not any(word in lowered for word in forbidden_substring), (
+                        f"credential-like key {key!r} in config.example.toml"
+                    )
+                    _walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    _walk(item)
+        _walk(parsed)
+
+        # No absolute home-directory paths in the example.
+        assert "/home/" not in text
+        assert "/Users/" not in text

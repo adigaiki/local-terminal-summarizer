@@ -34,6 +34,9 @@ temperature = 0.3
 max_tokens = 1024
 # none | low | medium | high -- sent only to backends that support it.
 reasoning_effort = "none"
+# Cap on accumulated response bytes per request (32 MiB). Protects against a
+# misbehaving local server growing memory without bound. 0 disables the cap.
+max_response_bytes = 33554432
 
 [defaults]
 profile = "plain"

@@ -13,7 +13,8 @@ from typing import Any, Iterator
 from summarizer.engine.base import Engine
 from summarizer.engine.capabilities import EngineCapabilities
 from summarizer.engine.client import HttpClient, HttpStatusError, HttpStatusErrorKinds
-from summarizer.errors import EngineError, MalformedResponse, ModelNotFound
+from summarizer.errors import EngineError, InputError, MalformedResponse, ModelNotFound
+from summarizer.chunking.token import estimate_tokens
 from summarizer.log import Diagnostics
 from summarizer.config import EngineSettings
 
@@ -51,7 +52,12 @@ class OpenAICompatEngine(Engine):
         self.max_tokens = int(settings.max_tokens)
         self.reasoning_effort = settings.reasoning_effort
         self._diag = diag
-        self._http = http or HttpClient(self.endpoint, timeout=self.timeout_seconds, diag=self._diag)
+        self._http = http or HttpClient(
+            self.endpoint,
+            timeout=self.timeout_seconds,
+            diag=self._diag,
+            max_response_bytes=settings.max_response_bytes,
+        )
         self._capabilities: EngineCapabilities | None = None
         self._config_context_length = int(settings.context_length or 0)
 
@@ -69,6 +75,21 @@ class OpenAICompatEngine(Engine):
         json_object: bool = False,
         temperature: float | None = None,
     ) -> dict[str, Any]:
+        # Last-resort invariant: the rendered prompt plus the reserved output
+        # must fit the planned window. Estimated, never silently exceeded;
+        # a genuine overflow is a loud configuration error instead of a
+        # truncated or dropped response.
+        estimated = estimate_tokens(prompt) + max(0, self.max_tokens)
+        if self._capabilities is not None:
+            length = self._capabilities.context_length
+            if length and estimated > length:
+                raise InputError(
+                    f"prompt of ~{estimate_tokens(prompt)} tokens plus "
+                    f"{self.max_tokens} reserved output tokens exceeds the "
+                    f"{length}-token context window",
+                    hint="lower reserve_output_tokens/max_tokens, or use a "
+                         "model with a larger context window",
+                )
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],

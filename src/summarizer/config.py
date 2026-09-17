@@ -59,6 +59,10 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         # Ordinary summaries should not spend an unbounded hidden reasoning
         # budget. Supported backends receive this explicit control.
         "reasoning_effort": "none",
+        # Cap on accumulated response bytes per request (32 MiB). A server
+        # (or anything impersonating one) must not be able to grow this
+        # process's memory without bound. 0 disables the cap.
+        "max_response_bytes": 33554432,
     },
     "defaults": {
         "profile": "plain",
@@ -105,6 +109,7 @@ _ENV_MAP: dict[str, tuple[str, str]] = {
     "SUMMARIZER_TIMEOUT": ("engine", "timeout_seconds"),
     "SUMMARIZER_RETRIES": ("engine", "retries"),
     "SUMMARIZER_MAX_TOKENS": ("engine", "max_tokens"),
+    "SUMMARIZER_MAX_RESPONSE_BYTES": ("engine", "max_response_bytes"),
     "SUMMARIZER_REASONING_EFFORT": ("engine", "reasoning_effort"),
     "SUMMARIZER_PROFILE": ("defaults", "profile"),
     "SUMMARIZER_FORMAT": ("defaults", "output_format"),
@@ -128,6 +133,8 @@ class EngineSettings:
     temperature: float = 0.3
     max_tokens: int = 1024
     reasoning_effort: str = "none"
+    # Cap on accumulated response bytes per HTTP exchange (0 disables).
+    max_response_bytes: int = 33554432
 
 
 @dataclass(frozen=True)

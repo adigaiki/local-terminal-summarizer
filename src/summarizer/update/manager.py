@@ -75,6 +75,7 @@ class UpdateManager:
             "https://example.invalid",  # placeholder; real URL passed per fetch
             timeout=min(config.engine.timeout_seconds, 30),
             diag=diag,
+            max_response_bytes=config.engine.max_response_bytes,
         )
 
     def check(self) -> UpdateCheck:

@@ -52,6 +52,7 @@ class HttpClient:
         timeout: float = 60.0,
         connect_timeout: float | None = None,
         diag: Diagnostics | None = None,
+        max_response_bytes: int = 0,
     ) -> None:
         parsed = urlsplit(endpoint if "://" in endpoint else f"http://{endpoint}")
         if parsed.scheme not in ("http", "https"):
@@ -62,6 +63,8 @@ class HttpClient:
         self.base_path = (parsed.path or "").rstrip("/")
         self.timeout = timeout
         self.connect_timeout = connect_timeout if connect_timeout is not None else min(timeout, _DEFAULT_CONNECT_TIMEOUT)
+        # Memory bound for response bodies and SSE event buffers. 0 disables.
+        self.max_response_bytes = max(0, int(max_response_bytes))
         self.diag = diag
 
     def url_for(self, path: str) -> str:
@@ -120,16 +123,18 @@ class HttpClient:
         except (BrokenPipeError, http.client.HTTPException, ConnectionResetError) as exc:
             raise EngineConnectionFailure(f"connection to {path} failed mid-request: {exc}") from exc
 
-    @staticmethod
     def _read_body(
+        self,
         resp: http.client.HTTPResponse,
         *,
         timeout: float,
         deadline: float,
         conn: http.client.HTTPConnection,
+        path: str = "",
     ) -> bytes:
         try:
             chunks: list[bytes] = []
+            total = 0
             while True:
                 if deadline - time.monotonic() <= 0:
                     raise EngineTimeout("request timed out while reading the response body")
@@ -139,6 +144,14 @@ class HttpClient:
                 chunk = resp.read(65536)
                 if not chunk:
                     break
+                total += len(chunk)
+                if self.max_response_bytes and total > self.max_response_bytes:
+                    raise MalformedResponse(
+                        f"response from {path or 'endpoint'} exceeded "
+                        f"{self.max_response_bytes} bytes before it completed",
+                        hint="raise [engine] max_response_bytes if your local "
+                             "server legitimately returns larger payloads",
+                    )
                 chunks.append(chunk)
             return b"".join(chunks)
         except socket.timeout as exc:
@@ -163,7 +176,7 @@ class HttpClient:
         conn = self._new_connection()
         try:
             resp = self._send(conn, method, path, payload, timeout=timeout)
-            body = self._read_body(resp, timeout=timeout, deadline=deadline, conn=conn)
+            body = self._read_body(resp, timeout=timeout, deadline=deadline, conn=conn, path=path)
             if resp.status not in (200, 201):
                 raise HttpStatusError(resp.status, body.decode("utf-8", "replace"), path=path)
             content_type = resp.getheader("Content-Type", "")
@@ -201,9 +214,14 @@ class HttpClient:
         resp = self._send(conn, "POST", path, payload, timeout=timeout)
         try:
             if resp.status not in (200, 201):
-                body = self._read_body(resp, timeout=timeout, deadline=deadline, conn=conn)
+                body = self._read_body(resp, timeout=timeout, deadline=deadline, conn=conn, path=path)
                 raise HttpStatusError(resp.status, body.decode("utf-8", "replace"), path=path)
+            # SSE events arrive delimiter-to-delimiter; a malicious or broken
+            # server can withhold the blank line forever. Bound the buffer so
+            # no single unterminated event can exhaust memory (>= the response
+            # cap when one is configured; 1 MiB otherwise).
             buffer = ""
+            buffer_limit = max(self.max_response_bytes, 1_048_576)
             while True:
                 if deadline - time.monotonic() <= 0:
                     raise EngineTimeout("stream timed out before completion")
@@ -212,6 +230,11 @@ class HttpClient:
                 if not line:
                     break
                 buffer += line.decode("utf-8", "replace")
+                if len(buffer) > buffer_limit:
+                    raise MalformedResponse(
+                        f"streamed event from {path} exceeded {buffer_limit} bytes without a delimiter",
+                        hint="the local server is not emitting valid SSE framing",
+                    )
                 while "\n\n" in buffer or "\r\n\r\n" in buffer:
                     if "\r\n\r\n" in buffer:
                         event, buffer = buffer.split("\r\n\r\n", 1)

@@ -60,6 +60,7 @@ def budget_for(
     *,
     config_context_length: int = 0,
     context_file_tokens: int = 0,
+    max_output_tokens: int = 0,
 ) -> ContextBudget:
     """Compute the token budget for one generation request.
 
@@ -77,7 +78,7 @@ def budget_for(
         context_length=context,
         prompt_tokens=prompt_token_overhead(profile),
         max_tokens_per_chunk=settings.max_tokens_per_chunk,
-        reserved_output_tokens=settings.reserve_output_tokens,
+        reserved_output_tokens=max(settings.reserve_output_tokens, max_output_tokens),
         context_file_tokens=context_file_tokens,
         context_source=source,
     )
@@ -119,6 +120,7 @@ def chunking_decision(
     strict: bool = False,
     context_file_tokens: int = 0,
     max_chunks: int | None = None,
+    max_output_tokens: int = 0,
 ) -> ChunkingDecision:
     """Choose a strategy for ``content`` and prove it fits the budget.
 
@@ -142,6 +144,7 @@ def chunking_decision(
         profile,
         config_context_length=config_context_length,
         context_file_tokens=context_file_tokens,
+        max_output_tokens=max_output_tokens,
     )
     if budget.max_chunk_tokens < 1:
         raise InputError(
@@ -150,15 +153,23 @@ def chunking_decision(
         )
 
     if unit == "chars":
-        doc_units = max(1, len(content))
+        # Characters are the splitting unit, but the *token* budget is what
+        # protects the context window (the chars/4 conversion is not a safe
+        # inverse of the estimator, which also counts words). Both limits
+        # must hold, including in strict mode.
+        doc_chars = max(1, len(content))
+        doc_units = max(1, estimate_tokens(content))
         max_chunk = min(budget.max_chunk_tokens * 4, settings.max_tokens_per_chunk * 4)
-        single = doc_units <= max_chunk
+        single = doc_chars <= max_chunk and doc_units <= budget.max_chunk_tokens
+        chunk_count = 1 if single else max(
+            math.ceil(doc_chars / max(1, max_chunk)),
+            math.ceil(doc_units / max(1, budget.max_chunk_tokens)),
+        )
     else:
         doc_units = estimate_tokens(content)
         max_chunk = budget.max_chunk_tokens
         single = doc_units <= max_chunk
-
-    chunk_count = 1 if single else math.ceil(doc_units / max(1, max_chunk))
+        chunk_count = 1 if single else math.ceil(doc_units / max(1, max_chunk))
 
     if strict and not single:
         raise _strict_error(budget, doc_units, unit)
@@ -244,6 +255,14 @@ def chunk_document(
         unit=decision.unit,
         source=source,
         max_chunks=decision.max_chunks or 256,
+        # Character-sized chunks must also respect the token budget that
+        # actually protects the context window (chars/4 is not a safe
+        # inverse of the estimator when words are short).
+        max_tokens=(
+            decision.budget.max_chunk_tokens
+            if decision.unit == "chars" and decision.budget is not None
+            else None
+        ),
     )
 
 

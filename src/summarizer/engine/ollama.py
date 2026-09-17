@@ -14,6 +14,7 @@ pipeline assumes Ollama; swap backends in config.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from summarizer.config import EngineSettings
@@ -31,6 +32,7 @@ __all__ = ["OllamaEngine"]
 
 TAGS_PATH = "/api/tags"
 SHOW_PATH = "/api/show"
+PS_PATH = "/api/ps"
 
 # Keys Ollama uses for the trained context window inside /api/show model_info.
 _CONTEXT_KEY_SUFFIXES = (".context_length", "context_length")
@@ -105,17 +107,20 @@ class OllamaEngine(OpenAICompatEngine):
         """Extract a context length from an /api/show response."""
         if not isinstance(info, dict):
             return None, None
+        params = info.get("parameters")
+        if isinstance(params, str):
+            match = re.search(r"(?m)^\s*num_ctx\s+(\d+)\s*$", params)
+            params = {"num_ctx": int(match.group(1))} if match else {}
+        if isinstance(params, dict):
+            num_ctx = params.get("num_ctx")
+            if type(num_ctx) is int and num_ctx > 0:
+                return num_ctx, f"{SHOW_PATH} (parameters.num_ctx)"
         model_info = info.get("model_info")
         if isinstance(model_info, dict):
             for suffix in _CONTEXT_KEY_SUFFIXES:
                 for key, value in model_info.items():
-                    if str(key).endswith(suffix) and isinstance(value, int) and value > 0:
-                        return value, f"{SHOW_PATH} ({key})"
-        params = info.get("parameters")
-        if isinstance(params, dict):
-            num_ctx = params.get("num_ctx")
-            if isinstance(num_ctx, int) and num_ctx > 0:
-                return num_ctx, f"{SHOW_PATH} (parameters.num_ctx)"
+                    if str(key).endswith(suffix) and type(value) is int and value > 0:
+                        return value, f"{SHOW_PATH} ({key}; trained maximum, verify server num_ctx)"
         return None, None
 
     def _context_from_tags(self) -> tuple[int | None, str | None]:
@@ -134,14 +139,44 @@ class OllamaEngine(OpenAICompatEngine):
             return value, f"{TAGS_PATH} (details.context_length)"
         return None, None
 
+    def _context_from_ps(self) -> tuple[int | None, str | None]:
+        """Runtime context window for the *loaded* model, via /api/ps.
+
+        The serving window (set by Ollama's `num_ctx`) can be far smaller than
+        the trained maximum in `model_info`; the serving window is the one
+        requests must actually fit, so it wins when the model is loaded.
+        """
+        try:
+            data = self._http.get_json(PS_PATH, timeout=min(self.timeout_seconds, 15))
+        except Exception:
+            return None, None
+        raw = data.get("models") if isinstance(data, dict) else None
+        if not isinstance(raw, list):
+            return None, None
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = _strip_latest(str(item.get("name", "")))
+            if name != _strip_latest(self.model):
+                continue
+            value = item.get("context_length")
+            if isinstance(value, int) and value > 0:
+                return value, f"{PS_PATH} (loaded runtime context)"
+        return None, None
+
     def _detect_context_length(self) -> tuple[int | None, str | None, str | None]:
         """Return ``(context_length, source, note)`` for the configured model."""
         configured = self._configured_context_length()
         if configured:
             return configured, CONTEXT_SOURCE_CONFIG, None
 
+        # Prefer the serving window of the loaded model: planning against the
+        # trained maximum can overflow what the server actually provides.
+        loaded, ps_note = self._context_from_ps()
+        if loaded:
+            return loaded, CONTEXT_SOURCE_SERVER, f"context discovered via {ps_note}"
         shown: int | None = None
-        note: str | None = None
+        note: str | None = ps_note
         try:
             info = self._http.post_json(
                 SHOW_PATH, {"model": self.model},

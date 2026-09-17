@@ -109,18 +109,37 @@ def split_document(
     unit: str = "tokens",
     source: str | None = None,
     max_chunks: int = 256,
+    max_tokens: int | None = None,
 ) -> list[Chunk]:
     """Split ``text`` into chunks that fit within ``max_units`` each.
 
     ``unit`` is "tokens" (default) or "chars". Each returned chunk reports the
     boundary that ended it, so callers can tell a clean paragraph split from a
     forced cut. ``source`` is carried onto every chunk as provenance.
+
+    ``max_tokens`` optionally adds a second, simultaneous limit: no chunk may
+    exceed ``max_units`` in its own unit *nor* ``max_tokens`` estimated tokens.
+    This keeps character-sized chunks honest against the token budget that
+    actually protects the model's context window.
     """
     if unit not in _UNIT_TO_MEASURE:
         raise ValueError(f"unknown splitting unit {unit!r} (expected tokens or chars)")
     if max_units < 1:
         raise ValueError("max_units must be >= 1")
+    if max_tokens is not None and max_tokens < 1:
+        raise ValueError("max_tokens must be >= 1 when given")
     measure = _UNIT_TO_MEASURE[unit]
+    if max_tokens is not None:
+        # Normalized dual measure: a value fits only when it is within
+        # ``max_units`` in the splitting unit AND within ``max_tokens``
+        # estimated tokens. Both are mapped onto the same scale so the
+        # boundary cutter sees one monotone limit.
+        token_scale = max_units / float(max_tokens)
+        base_measure = measure
+
+        def measure(value: str) -> int:
+            return max(base_measure(value), int(_measure_tokens(value) * token_scale))
+
     if overlap_units >= max_units:
         overlap_units = max(0, max_units - 1)
 
@@ -165,6 +184,15 @@ def split_document(
         overlap = _overlap_tail(previous_body, overlap_units, unit)
         overlap = _fit_overlap(overlap, max_units - measure(body), measure)
         combined = (overlap + body) if overlap else body
+        if max_tokens is not None and overlap:
+            # The dual measure is not additive (max of two estimates), so a
+            # tail that "fits" beside the body separately can still push the
+            # assembled chunk over the token cap. Shrink the tail until the
+            # real assembled text fits; the body alone always does.
+            while overlap and _measure_tokens(combined) > max_tokens:
+                cut = overlap.find(" ")
+                overlap = overlap[cut + 1 :] if cut != -1 else ""
+                combined = (overlap + body) if overlap else body
         chunks.append(
             Chunk(
                 index=index,

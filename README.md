@@ -77,14 +77,17 @@ encoding = "utf-8"
 
 Environment overrides include `SUMMARIZER_BACKEND`, `SUMMARIZER_ENDPOINT`,
 `SUMMARIZER_MODEL`, `SUMMARIZER_TIMEOUT`, `SUMMARIZER_RETRIES`,
-`SUMMARIZER_MAX_TOKENS`, `SUMMARIZER_REASONING_EFFORT`,
-`SUMMARIZER_PROFILE`, and `SUMMARIZER_FORMAT`.
+`SUMMARIZER_MAX_TOKENS`, `SUMMARIZER_MAX_RESPONSE_BYTES`,
+`SUMMARIZER_REASONING_EFFORT`, `SUMMARIZER_PROFILE`, and `SUMMARIZER_FORMAT`.
 
 `reasoning_effort` defaults to `none`, appropriate for ordinary summaries.
 It is sent only to backends that advertise support for compatible reasoning
 control; the generic OpenAI-compatible backend omits the optional field.
 Every request sends `max_tokens`, so generation is bounded even when a model
-has a large context window.
+has a large context window. Responses are bounded too: accumulation is capped
+at `max_response_bytes` (default 32 MiB; 0 disables) per request, so a
+misbehaving local server cannot grow memory without bound — an oversized
+reply fails cleanly with exit code 2 instead.
 
 Built-in profiles are `plain`, `code`, `academic`, and `meeting`. Put a
 `NAME.md` profile in `~/.config/summarizer/prompts/` to override or add one.

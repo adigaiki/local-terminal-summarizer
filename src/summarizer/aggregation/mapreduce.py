@@ -78,7 +78,10 @@ def plan_reduce_groups(
 def truncate_to_tokens(text: str, limit_tokens: int) -> str:
     """Word-aligned truncation used only when one summary cannot fit at all.
 
-    Never silent: callers warn when they use this.
+    Never silent: callers warn when they use this. The result always satisfies
+    :func:`estimate_tokens` against ``limit_tokens`` -- the chars/4 conversion
+    is only a first guess, and the estimator also counts words, so the clip is
+    verified (and binary-searched tighter if needed) before returning.
     """
     if limit_tokens <= 0:
         return ""
@@ -89,6 +92,19 @@ def truncate_to_tokens(text: str, limit_tokens: int) -> str:
     cut = clipped.rfind(" ")
     if cut > 0:
         clipped = clipped[:cut]
+    if estimate_tokens(clipped) > limit_tokens:
+        # Longest prefix that really fits under the estimator.
+        lo, hi = 0, len(clipped)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if estimate_tokens(text[:mid]) <= limit_tokens:
+                lo = mid
+            else:
+                hi = mid - 1
+        clipped = text[:lo]
+        cut = clipped.rfind(" ")
+        if cut > 0 and estimate_tokens(clipped[:cut]) > 0:
+            clipped = clipped[:cut]
     return clipped
 
 
@@ -224,6 +240,18 @@ class MapReduce:
                 "reduce did not converge within its context budget",
                 hint="lower engine.max_tokens or use a larger context window",
             )
+        # Final invariant: the last reduce prompt must itself fit the budget.
+        # _bound_oversized guarantees single summaries fit, but a *group* of
+        # them can still exceed the budget (a small budget with several
+        # summaries); refusing loudly beats silently overflowing the window.
+        for group in plan_reduce_groups(current, usable_tokens=usable_tokens):
+            if sum(estimate_tokens(s) for s in group) + REDUCE_SUMMARY_OVERHEAD_TOKENS > usable_tokens:
+                from summarizer.errors import InputError
+                raise InputError(
+                    "interim summaries exceed the reduce budget even after "
+                    "truncation; refusing to overflow the context window",
+                    hint="lower engine.max_tokens, or use a larger context window",
+                )
         return current
 
     def _bound_oversized(self, summaries: list[str], *, usable_tokens: int) -> list[str]:
