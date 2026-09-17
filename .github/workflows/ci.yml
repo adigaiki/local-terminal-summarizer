@@ -1,0 +1,55 @@
+# Minimal continuous integration for a local-first tool.
+#
+# The test suite never contacts an LLM or the internet: engine behaviour is
+# exercised with an in-process recording engine and a throwaway loopback HTTP
+# server. CI therefore needs no Ollama server, no GPU/CUDA, and no model
+# download. The only network traffic is installing the declared dependencies.
+#
+# No third-party linter or type checker is configured in this repository
+# (there is no ruff/mypy/flake8 configuration), so none is run here; the
+# byte-compile step is the interpreter's own syntax check.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# The workflow only reads the checkout; no write scopes are needed.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      # Report every supported interpreter's result, not just the first failure.
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor declared in pyproject.toml (requires-python >= 3.11);
+        # 3.14 is the interpreter this release is developed and verified on.
+        python-version: ["3.11", "3.14"]
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install project and test dependencies
+        # Matches the documented install path in README ("Install and run").
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+
+      - name: Byte-compile sources and tests
+        run: python -m compileall -q src tests
+
+      - name: Run test suite
+        # pytest configuration lives in pyproject.toml (testpaths = tests).
+        run: python -m pytest

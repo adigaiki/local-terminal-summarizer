@@ -1,0 +1,110 @@
+# ---------------------------------------------------------------------------
+# Python build/test artifacts
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.so
+.eggs/
+*.egg-info/
+build/
+dist/
+wheels/
+sdist/
+
+# ---------------------------------------------------------------------------
+# Virtual environments
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------------------------------------------------------------------------
+# Caches and coverage
+# ---------------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit*.xml
+
+# ---------------------------------------------------------------------------
+# Secrets and local configuration -- NEVER commit these.
+# The tracked example is config.example.toml; copy it and keep your own copy
+# outside the repository (recommended: ~/.config/summarizer/config.toml).
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.env
+secrets/
+/secrets.toml
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+id_rsa*
+id_ed25519*
+id_ecdsa*
+known_hosts
+credentials.json
+.token
+.tokens
+/summarizer.toml
+# Belt and braces: make sure the example stays tracked.
+!config.example.toml
+
+# Personal prompt overrides (may contain private context/instructions).
+# Rooted so the shipped profiles under src/ are never affected.
+/prompts/
+
+# ---------------------------------------------------------------------------
+# Machine-local model caches and large binary artifacts
+# ---------------------------------------------------------------------------
+.ollama/
+/models/
+*.gguf
+*.safetensors
+*.bin
+
+# ---------------------------------------------------------------------------
+# Logs, profiling and scratch output
+# ---------------------------------------------------------------------------
+*.log
+logs/
+*.prof
+*.profraw
+*.pyperf
+*.out
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+scratch/
+
+# ---------------------------------------------------------------------------
+# Editor / IDE state
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-*
+.project
+.settings/
+.vim/
+
+# ---------------------------------------------------------------------------
+# OS junk
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini

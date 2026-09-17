@@ -1,0 +1,74 @@
+# summarizer example configuration
+# ---------------------------------------------------------------------------
+# This file contains SAFE PLACEHOLDERS ONLY. It is safe to commit and share:
+# no credentials, no tokens, no personal paths, no real remote services.
+#
+# It exists so you can see every supported option. Copy it and edit your copy:
+#
+#   mkdir -p ~/.config/summarizer
+#   cp config.example.toml ~/.config/summarizer/config.toml
+#
+# IMPORTANT: keep your real configuration OUT of Git. `summarizer.toml` in
+# this directory and `~/.config/summarizer/config.toml` are both gitignored;
+# treat them like dotfiles, not like project source.
+#
+# The endpoint documented here is the loopback address of a LOCAL model server
+# running on your own machine. There is no cloud endpoint, no API key, and no
+# account: point `endpoint` at whatever local server you already run.
+# ---------------------------------------------------------------------------
+
+[engine]
+# Which local backend to talk to: "ollama" or "openai" (OpenAI-compatible).
+backend = "ollama"
+# Loopback address of YOUR local server. Never a remote/cloud service.
+endpoint = "http://localhost:11434"
+# A model name that exists on YOUR server. Check with: ollama list
+model = "llama3.1:8b"
+timeout_seconds = 60
+retries = 1
+# 0 means: discover the context window from the local server when possible.
+# Set a number to override discovery (useful when the backend cannot report it).
+context_length = 0
+temperature = 0.3
+# Hard cap on generated tokens for every request (map, reduce, and direct).
+max_tokens = 1024
+# none | low | medium | high -- sent only to backends that support it.
+reasoning_effort = "none"
+
+[defaults]
+profile = "plain"
+output_format = "markdown"
+stream = true
+lang = ""
+chunk_strategy = "auto"
+
+[chunking]
+max_tokens_per_chunk = 3000
+overlap_tokens = 200
+reserve_output_tokens = 1000
+# Safety valve for very large documents: refuse to create more chunks than this.
+max_chunks = 256
+
+[input]
+# 50 MiB / 1,000,000 lines. These limits also bound what may be read from an
+# unbounded stdin stream.
+max_bytes = 52428800
+max_lines = 1000000
+encoding = "utf-8"
+
+[session]
+enabled = false
+notes_dir = "~/.local/share/summarizer/sessions"
+digest_format = "markdown"
+append_mode = true
+
+[update]
+# The local-only core never checks for updates. `summarize --check-update` is
+# an explicit, opt-in, check-only operation that does nothing unless you set a
+# URL here yourself. Leave empty to disable it entirely.
+mode = "off"
+channel = "stable"
+check_on_start = false
+require_confirmation = true
+url = ""
+public_key_path = ""
