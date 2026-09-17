@@ -18,12 +18,16 @@ chunk seams is not lost.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from summarizer.document.model import Document
 
 __all__ = [
     "Chunk",
     "split_document",
+    "annotate_document_chunks",
     "BOUNDARY_ORDER",
     "BOUNDARY_PARAGRAPH",
     "BOUNDARY_SENTENCE",
@@ -80,6 +84,16 @@ class Chunk:
     boundary: str = BOUNDARY_PARAGRAPH
     # Provenance of the document this chunk came from (filename, "stdin", ...).
     source: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    start_page: int | None = None
+    end_page: int | None = None
+    total: int | None = None
+
+    @property
+    def text_start_char(self) -> int:
+        """Full-text start including overlap; start_char is the new body start."""
+        return self.start_char - self.overlap_chars
 
     def provenance(
         self,
@@ -90,7 +104,13 @@ class Chunk:
         """A compact, JSON-safe description of where this chunk came from."""
         return {
             "index": self.index,
-            "count": total,
+            "count": total if total is not None else self.total,
+            "total": total if total is not None else self.total,
+            "text_start_char": self.text_start_char,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "start_page": self.start_page,
+            "end_page": self.end_page,
             "source": source if source is not None else self.source,
             "boundary": self.boundary,
             "start_char": self.start_char,
@@ -99,6 +119,22 @@ class Chunk:
             "est_tokens": self.token_estimate,
             "overlap_chars": self.overlap_chars,
         }
+
+
+def annotate_document_chunks(document: Document, chunks: list[Chunk]) -> list[Chunk]:
+    """Attach canonical source locations without knowing any reader details.
+
+    Existing start/end fields describe the non-overlap body. Full chunk text
+    is document.content[text_start_char:end_char]. Line/page ranges follow
+    the body range; callers can locate overlap using Document.provenance_span.
+    """
+    annotated: list[Chunk] = []
+    for chunk in chunks:
+        span = document.provenance_span(chunk.start_char, chunk.end_char)
+        if chunk.text_start_char < 0 or document.content[chunk.text_start_char:chunk.end_char] != chunk.text:
+            raise ValueError("chunk text does not match its document span")
+        annotated.append(replace(chunk, total=len(chunks), **span))
+    return annotated
 
 
 def split_document(
@@ -240,10 +276,10 @@ def _cut_at(
         if cut <= prev:
             continue
         piece = segment[prev:cut]
-        if piece.strip():
+        if piece:
             pieces.append((piece, start + prev, boundary))
         prev = cut
-    if prev < len(segment) and segment[prev:].strip():
+    if prev < len(segment):
         # The trailing piece ends where the paragraph ended, so its boundary
         # is cleaner than the cutter that happened to be in play.
         pieces.append((segment[prev:], start + prev, BOUNDARY_PARAGRAPH))
@@ -310,12 +346,12 @@ def _fit_overlap(tail: str, available_units: int, measure) -> str:
     if measure(tail) <= available_units:
         return tail
     # Prefer whole words while shrinking toward the end of the prior chunk.
-    words = tail.split()
-    while words:
-        candidate = " ".join(words)
+    # Slice at original word starts: splitting/joining would normalize tabs,
+    # repeated spaces and newlines, breaking exact source provenance.
+    for match in re.finditer(r"\S+", tail):
+        candidate = tail[match.start():]
         if measure(candidate) <= available_units:
             return candidate
-        words.pop(0)
     # A single very long word may still be too large. Character trimming is
     # the final fallback and the caller's maximum remains authoritative.
     for start in range(len(tail)):

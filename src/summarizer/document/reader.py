@@ -102,7 +102,7 @@ _CODE_SUFFIXES = {
     ".toml", ".yaml", ".yml", ".json", ".xml", ".html", ".css", ".sql", ".lua",
     ".swift", ".kt", ".kts", ".scala", ".ex", ".exs", ".erl", ".hs", ".ml",
     ".clj", ".cljs", ".vim", ".tf", ".proto", ".graphql", ".dockerfile", ".ini",
-    ".cfg", ".conf", ".txt", ".log",
+    ".cfg", ".conf",
 }
 
 
@@ -120,20 +120,64 @@ def checked_size(path: Path, max_bytes: int, *, what: str = "input") -> None:
         )
 
 
-def decode_bytes(raw: bytes, encoding: str, *, diag: Diagnostics, what: str = "input") -> str:
-    """Decode input bytes with a documented fallback chain.
+def decode_text(
+    raw: bytes,
+    encoding: str,
+    *,
+    diag: Diagnostics,
+    what: str = "input",
+) -> tuple[str, str, list[str]]:
+    """Decode input bytes, reporting the encoding actually used.
 
-    Tries the requested encoding strictly first. On failure, retries with
-    UTF-8 (lossy) and then latin-1 (lossless) so the program never crashes
-    on undecodable input.
+    Fallback chain (documented, never crashes on undecodable bytes):
+
+        1. the requested encoding, strictly
+        2. UTF-8, replacing invalid sequences
+        3. latin-1, a backstop that can decode any byte sequence
+
+    (Because step 2 never raises, step 3 is a backstop in practice rather than
+    a commonly-taken path.)
+
+    Returns ``(content, encoding_used, warnings)`` so readers can record the
+    real encoding and surface a warning rather than silently mislabelling the
+    document. A NUL byte is the only binary signal we reject: it means the
+    content is not text, while other control characters (ANSI colour codes in
+    logs, for example) are legitimate text and are kept.
     """
-    for enc, strict in ((encoding, True), ("utf-8", False), ("latin-1", False)):
+    import codecs
+
+    try:
+        requested = codecs.lookup(encoding).name
+    except LookupError as exc:
+        raise InputError(
+            f"unknown input encoding {encoding!r}",
+            hint="use a Python codec name such as utf-8 or latin-1",
+        ) from exc
+
+    warnings: list[str] = []
+    content = ""
+    used = requested
+    for candidate, errors in ((requested, "strict"), ("utf-8", "replace"), ("latin-1", "replace")):
         try:
-            return raw.decode(enc, errors="strict" if strict else "replace")
+            content = raw.decode(candidate, errors)
         except UnicodeDecodeError:
-            diag.warn(
-                f"{what} is not valid {enc}; falling back to lossy decoding"
-            )
+            warnings.append(f"{what} is not valid {candidate}; falling back")
+            diag.warn(f"{what} is not valid {candidate}; falling back")
             continue
-    # Unreachable: latin-1 decodes every byte.
-    return raw.decode("latin-1", errors="replace")
+        used = candidate
+        if candidate != requested:
+            warnings.append(f"{what} was decoded as {candidate} instead of {requested}")
+            diag.warn(warnings[-1])
+        break
+
+    if "\x00" in content:
+        raise InputError(
+            f"{what} appears to be binary, not text",
+            hint="use a supported text format, or a PDF with the `pdf` extra",
+        )
+    return content, used, warnings
+
+
+def decode_bytes(raw: bytes, encoding: str, *, diag: Diagnostics, what: str = "input") -> str:
+    """Decode input bytes and return only the text (see :func:`decode_text`)."""
+    return decode_text(raw, encoding, diag=diag, what=what)[0]

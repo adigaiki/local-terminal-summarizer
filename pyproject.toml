@@ -29,7 +29,7 @@ dependencies = []
 [project.optional-dependencies]
 pdf = ["pypdf>=4.0"]
 ocr = ["pypdf>=4.0", "pytesseract>=0.3.10", "pdf2image>=1.16"]
-test = ["pytest>=8.0"]
+test = ["pytest>=8.0", "pypdf>=4.0"]
 
 [project.scripts]
 summarize = "summarizer.cli:main"

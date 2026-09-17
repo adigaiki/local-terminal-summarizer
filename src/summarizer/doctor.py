@@ -8,6 +8,8 @@ internet.
 
 from __future__ import annotations
 
+import importlib.util
+import shutil
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -27,6 +29,9 @@ class Check:
     message: str = ""
     hint: str = ""
     detail: list[str] = field(default_factory=list)
+    # An intentionally-uninstalled extra is reported, never treated as a
+    # failure: optional readers must not make the doctor look broken.
+    optional: bool = False
 
 
 @dataclass
@@ -40,11 +45,65 @@ class DoctorReport:
 
     @property
     def all_ok(self) -> bool:
-        return all(check.ok for check in self.checks)
+        return all(check.ok for check in self.checks if not check.optional)
 
 
-def _check(name: str, ok: bool, message: str = "", hint: str = "", detail: list[str] | None = None) -> Check:
-    return Check(name=name, ok=ok, message=message, hint=hint, detail=detail or [])
+def _check(
+    name: str,
+    ok: bool,
+    message: str = "",
+    hint: str = "",
+    detail: list[str] | None = None,
+    optional: bool = False,
+) -> Check:
+    return Check(name=name, ok=ok, message=message, hint=hint, detail=detail or [], optional=optional)
+
+
+def _reader_checks() -> list[Check]:
+    """Diagnose optional reader capabilities locally (no downloads, no installs)."""
+    checks: list[Check] = []
+
+    # PDF text extraction (optional `pdf` extra).
+    if importlib.util.find_spec("pypdf") is not None:
+        checks.append(_check("PDF reader", True, message="installed (pypdf)"))
+    else:
+        checks.append(
+            _check(
+                "PDF reader",
+                False,
+                message="optional, not installed",
+                hint="install with: pip install 'summarizer[pdf]'",
+                optional=True,
+            )
+        )
+
+    # OCR (optional `ocr` extra plus local binaries).
+    python_ok = all(
+        importlib.util.find_spec(module) is not None
+        for module in ("pytesseract", "pdf2image")
+    )
+    missing_binaries = [
+        binary for binary in ("pdftoppm", "pdfinfo", "tesseract")
+        if shutil.which(binary) is None
+    ]
+    if python_ok and not missing_binaries:
+        checks.append(_check("OCR", True, message="installed (local Tesseract + Poppler)"))
+    else:
+        missing = list(missing_binaries)
+        if not python_ok:
+            missing.insert(0, "pytesseract/pdf2image")
+        checks.append(
+            _check(
+                "OCR",
+                False,
+                message=f"optional, not installed (missing: {', '.join(missing)})",
+                hint="pip install 'summarizer[ocr]' plus local Tesseract and "
+                     "Poppler; nothing is installed automatically and no "
+                     "online OCR service is used",
+                optional=True,
+            )
+        )
+    return checks
 
 
 def diagnose(
@@ -78,6 +137,7 @@ def diagnose(
         checks[-1].hint = "start your local model server, or fix `[engine] endpoint` in config"
         checks.append(_check("Model available", False, message="skipped: engine unreachable"))
         checks.append(_check("Capabilities", False, message="skipped: engine unreachable"))
+        checks.extend(_reader_checks())
         return DoctorReport(
             checks=checks, engine=engine, model=engine.model,
             endpoint=engine.endpoint, backend=engine.backend, config=config,
@@ -150,6 +210,7 @@ def diagnose(
     except EngineError as exc:
         checks.append(_check("Capabilities", False, message=exc.message, hint=exc.hint or "the server may not expose capability info"))
 
+    checks.extend(_reader_checks())
     return DoctorReport(checks=checks, engine=engine, model=engine.model, endpoint=engine.endpoint, backend=engine.backend, config=config)
 
 
@@ -171,7 +232,7 @@ def _model_is_available(configured: str, installed: list[str]) -> bool:
 def render_doctor(report: DoctorReport) -> str:
     lines: list[str] = ["Summarizer diagnostics", ""]
     for check in report.checks:
-        glyph = "\u2713" if check.ok else "\u2717"
+        glyph = "\u2713" if check.ok else ("!" if check.optional else "\u2717")
         line = f"{glyph} {check.name}"
         if check.message:
             line += f" — {check.message}"

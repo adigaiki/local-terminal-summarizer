@@ -119,7 +119,7 @@ class DryRunReport:
             f"  lines:        {doc.line_count}",
             f"  est. tokens:  ~{doc.token_estimate}",
         ]
-        for key in ("language", "pages", "headings"):
+        for key in ("language", "pages", "headings", "extracted_bytes", "pdf", "ocr", "warnings"):
             if key in doc.metadata:
                 value = doc.metadata[key]
                 if isinstance(value, list):
@@ -205,6 +205,9 @@ class Pipeline:
             "max_bytes": self.config.input.max_bytes,
             "max_lines": self.config.input.max_lines,
             "encoding": opts.encoding or self.config.input.encoding,
+            "max_pdf_pages": self.config.input.max_pdf_pages,
+            "max_extracted_bytes": self.config.input.max_extracted_bytes,
+            "ocr_timeout_seconds": self.config.input.ocr_timeout_seconds,
             "ocr": opts.ocr,
         }
         document = read_source(source, diag=self.diag, options=options)
@@ -327,6 +330,7 @@ class Pipeline:
             settings=self.config.chunking,
             source=document.source,
         )
+        chunks = document.annotate_chunks(chunks)
         boundary: str | None = None
 
         self.diag.progress(decision.describe())

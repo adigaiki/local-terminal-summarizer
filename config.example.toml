@@ -58,6 +58,13 @@ max_chunks = 256
 max_bytes = 52428800
 max_lines = 1000000
 encoding = "utf-8"
+# PDF resource limits (a PDF is a parser input, so it is bounded separately).
+# max_pdf_pages is checked before any page is extracted.
+max_pdf_pages = 2000
+# Bound on extracted text, checked while accumulating pages (32 MiB).
+max_extracted_bytes = 33554432
+# Per-page timeout for --ocr rendering/recognition (local Tesseract/Poppler).
+ocr_timeout_seconds = 120
 
 [session]
 enabled = false

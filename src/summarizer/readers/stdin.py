@@ -16,7 +16,7 @@ from summarizer.document.model import Document
 from summarizer.document.reader import (
     ABSOLUTE_MAX_BYTES,
     ABSOLUTE_MAX_LINES,
-    decode_bytes,
+    decode_text,
     effective_limit,
 )
 from summarizer.errors import InputError
@@ -86,12 +86,15 @@ def read_stdin(
     raw = raw if raw is not None else sys.stdin.buffer
 
     data = bounded_read(raw, max_bytes=max_bytes, max_lines=max_lines, what="stdin")
-    content = decode_bytes(data, encoding, diag=diag, what="stdin input")
+    content, encoding_used, warnings = decode_text(data, encoding, diag=diag, what="stdin input")
+    metadata: dict = {"stream": True}
+    if warnings:
+        metadata["warnings"] = warnings
     return Document(
         content=content,
         source="stdin",
         mime_type="text/plain",
-        encoding=encoding,
+        encoding=encoding_used,
         size=len(data),
-        metadata={"stream": True},
+        metadata=metadata,
     )

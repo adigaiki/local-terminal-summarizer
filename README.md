@@ -130,9 +130,83 @@ All diagnostics and progress are written to stderr; stdout contains only the
 summary or requested JSON. `-o FILE` writes through a same-directory temporary
 file and atomically replaces the destination only after a successful result.
 
-PDF extraction needs `pip install 'summarizer[pdf]'`. OCR is opt-in (`--ocr`)
-and additionally needs `pip install 'summarizer[ocr]'` plus Poppler's
-`pdftoppm` command.
+## Readers
+
+Every reader produces the same `Document` (content, source, MIME type,
+encoding, size, and reader metadata), so the engine and chunker never know
+which reader ran.
+
+| Input | Reader | Notes |
+| --- | --- | --- |
+| `-` / no argument | stdin | Bounded; a TTY with no input reports an error |
+| `.txt`, `.log`, other/unknown extensions | text | Any file whose content is valid text stays usable |
+| `.md`, `.markdown`, `.mdown`, `.mkd` | markdown | Source is preserved verbatim; headings are collected |
+| `.py`, `.rs`, `.c`, `.go`, `.toml`, ... | code | Source passes through unmodified; language is recorded |
+| `.pdf` | PDF (optional) | Page-aware extraction with page provenance |
+
+Markdown is never rendered to HTML, links are never fetched, source code is
+never parsed or executed, and no reader treats document text as instructions.
+Content that is binary (contains NUL bytes) is rejected with a clear error
+rather than summarized as mojibake.
+
+### Optional dependencies
+
+```sh
+pip install 'summarizer[pdf]'   # PDF text extraction (pypdf, BSD-3-Clause)
+pip install 'summarizer[ocr]'   # OCR: adds pytesseract + pdf2image
+```
+
+The base install has no runtime dependencies. PDF reading is entirely local:
+nothing is downloaded, no PDF metadata is sent anywhere, and encryption is
+refused rather than worked around. Scanned (image-only) PDFs are detected and
+reported instead of silently producing an empty summary. `--ocr` reads them
+locally and additionally needs the system `tesseract` and Poppler
+(`pdftoppm`, `pdfinfo`) binaries; missing components produce an actionable
+error, and this tool never installs software or calls an online OCR service.
+`summarize doctor` reports both capabilities, marking an intentionally
+uninstalled extra with `!` rather than treating it as a failure.
+
+### Provenance and the JSON schema
+
+Chunks carry provenance: source, chunk index and count, character offsets,
+source line range, PDF page range (when the input has pages), the boundary
+that produced the cut, and the overlap size. Line and page numbers are
+one-based and inclusive; character offsets are zero-based, half-open Python
+string offsets. `--format json` emits a stable envelope:
+
+```json
+{
+  "document": {"source": "...", "mime_type": "...", "encoding": "...",
+               "size_bytes": 0, "line_count": 0, "char_count": 0,
+               "metadata": {"pages": 0, "page_starts": [], "warnings": []}},
+  "profile": "plain",
+  "engine": {"backend": "ollama", "model": "...", "endpoint": "..."},
+  "strategy": "direct|mapreduce",
+  "chunks": 0,
+  "summary": {},
+  "warnings": [],
+  "chunk_provenance": [
+    {"index": 0, "count": 0, "source": "...", "boundary": "paragraph",
+     "start_char": 0, "end_char": 0, "start_line": 1, "end_line": 1,
+     "start_page": null, "end_page": null, "chars": 0, "est_tokens": 0,
+     "overlap_chars": 0}
+  ],
+  "prompt_boundary": "document-...",
+  "duration_seconds": 0.0
+}
+```
+
+`metadata` and `chunk_provenance` are omitted when empty. Provenance never
+appears in the plain/Markdown summary — only in JSON and `--dry-run` — and it
+is never inserted into trusted prompt instructions.
+
+### Resource limits
+
+Rich formats add parsing surface, so readers are bounded by `input.max_bytes`,
+`input.max_lines`, and, for PDFs, `input.max_pdf_pages` and
+`input.max_extracted_bytes`. Defaults are generous for real research
+documents; absurd or hostile input fails with a clear error rather than
+exhausting memory.
 
 ## Exit status
 

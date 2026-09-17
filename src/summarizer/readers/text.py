@@ -9,9 +9,7 @@ from summarizer.document.model import Document
 from summarizer.document.reader import (
     ABSOLUTE_MAX_BYTES,
     ABSOLUTE_MAX_LINES,
-    checked_size,
-    decode_bytes,
-    effective_limit,
+    checked_size, decode_text, effective_limit,
 )
 from summarizer.errors import InputError
 from summarizer.log import Diagnostics
@@ -37,12 +35,15 @@ def read_text_file(path: Path, *, diag: Diagnostics, options: dict | None = None
     except OSError as exc:
         raise InputError(f"cannot read {path}: {exc}") from exc
 
-    content = decode_bytes(raw, encoding, diag=diag, what=f"{path}")
+    content, encoding_used, warnings = decode_text(raw, encoding, diag=diag, what=f"{path}")
+    metadata = file_metadata(path)
+    if warnings:
+        metadata["warnings"] = warnings
     return Document(
         content=content,
         source=str(path),
         mime_type="text/plain",
-        encoding=encoding,
+        encoding=encoding_used,
         size=len(raw),
-        metadata=file_metadata(path),
+        metadata=metadata,
     )
