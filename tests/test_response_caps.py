@@ -96,7 +96,10 @@ def test_body_within_cap_succeeds(mode):
 def test_sse_unterminated_event_capped():
     server, thread = _make_server("sse")
     try:
-        client = _client(server.server_port, cap=4 * 1024 * 1024)
+        # A 1 MiB cap (the buffer floor) trips after ~1 MiB of undelimited
+        # data, long before the server finishes its 4 MiB of writes, so the
+        # test is not sensitive to transfer speed under load.
+        client = _client(server.server_port, cap=1024 * 1024)
         events = client.stream_sse("/v1/chat/completions", {"model": "m", "stream": True})
         first = next(iter(events))
         assert isinstance(first, dict)  # the well-formed event arrives

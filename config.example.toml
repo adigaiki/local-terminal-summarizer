@@ -67,10 +67,20 @@ max_extracted_bytes = 33554432
 ocr_timeout_seconds = 120
 
 [session]
-enabled = false
+# Master switch for session recording. A run is still only recorded when a
+# session is explicitly selected (--session NAME), via $SUMMARIZER_SESSION,
+# or by the documented same-directory rule; set false to disable recording
+# entirely. Management commands (session start/status/end) always work.
+enabled = true
+# Sessions root. Each session is a subdirectory holding state.json (the
+# source of truth), digest.md, digest.json and a lock file. Created 0700;
+# files 0600. Keep this outside synced/shared locations: session data
+# records which files you summarized and when (never their contents).
 notes_dir = "~/.local/share/summarizer/sessions"
+# digest.md, digest.json, or both (always rendered atomically from state).
 digest_format = "markdown"
-append_mode = true
+# Warn (never auto-close or delete) about sessions open longer than this.
+max_age_hours = 24
 
 [update]
 # The local-only core never checks for updates. `summarize --check-update` is

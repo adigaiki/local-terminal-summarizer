@@ -89,10 +89,13 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "ocr_timeout_seconds": 120,
     },
     "session": {
-        "enabled": False,
+        # Master switch. Recording still requires an explicitly selected
+        # session (--session, $SUMMARIZER_SESSION, or the same-directory rule).
+        "enabled": True,
         "notes_dir": "~/.local/share/summarizer/sessions",
-        "digest_format": "markdown",
-        "append_mode": True,
+        "digest_format": "markdown",  # markdown, json, or both
+        # Warn (never auto-close) about sessions open longer than this.
+        "max_age_hours": 24,
     },
     "update": {
         "mode": "off",
@@ -172,10 +175,11 @@ class InputSettings:
 
 @dataclass(frozen=True)
 class SessionSettings:
-    enabled: bool = False
+    """Session recording. Nothing is stored unless a session is selected."""
+    enabled: bool = True
     notes_dir: str = "~/.local/share/summarizer/sessions"
     digest_format: str = "markdown"
-    append_mode: bool = True
+    max_age_hours: float = 24.0
 
 
 @dataclass(frozen=True)
@@ -371,7 +375,7 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         enabled=_bool(merged["session"], "enabled", ctx),
         notes_dir=_str(merged["session"], "notes_dir", ctx),
         digest_format=_str(merged["session"], "digest_format", ctx),
-        append_mode=_bool(merged["session"], "append_mode", ctx),
+        max_age_hours=_float(merged["session"], "max_age_hours", ctx, minimum=0.0, maximum=8760.0),
     )
     update = UpdateSettings(
         mode=_str(merged["update"], "mode", ctx),

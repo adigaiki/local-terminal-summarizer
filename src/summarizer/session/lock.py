@@ -7,6 +7,7 @@ processes writing the session notes/state, which is what we are.
 from __future__ import annotations
 
 import fcntl
+import os
 from pathlib import Path
 from typing import BinaryIO
 
@@ -25,6 +26,12 @@ class FileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.path.open("a+b")
         try:
+            # The lock file lives next to private session state; keep it
+            # restrictive too, even though it holds no data.
+            try:
+                os.chmod(self.path, 0o600)
+            except OSError:  # pragma: no cover - filesystem dependent
+                pass
             if self.timeout:
                 import time
 

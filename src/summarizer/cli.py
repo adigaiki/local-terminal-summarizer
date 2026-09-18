@@ -65,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  summarize README.md --format json | jq\n"
             "  summarize README.md --dry-run\n"
             "  summarize doctor\n"
+            "  summarize session start research\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -124,6 +125,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="input encoding (default: utf-8 with documented fallback)")
     parser.add_argument("--ocr", action="store_true",
                         help="enable OCR for scanned PDFs (optional dependencies)")
+    parser.add_argument("--session", dest="session_name", metavar="NAME", default=None,
+                        help="record this run into the named session (explicit selection)")
+    parser.add_argument("--no-session", dest="no_session", action="store_true",
+                        help="do not record this run into any session")
+    parser.add_argument("--notes-path", dest="notes_path", metavar="PATH", default=None,
+                        help="override the sessions root directory for this invocation")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="verbose diagnostics on stderr")
     parser.add_argument("--debug", action="store_true",
@@ -138,6 +145,8 @@ def _classify_operands(parser: argparse.ArgumentParser, args) -> None:
     operands = args.operands
     args.command = None
     args.input = None
+    # NOTE: args.session_name is initialised by argparse (default None) and may
+    # already hold a `--session NAME` value; it must not be reset here.
     if not operands:
         return
     if operands[0] == "doctor":
@@ -154,9 +163,11 @@ def _classify_operands(parser: argparse.ArgumentParser, args) -> None:
         if action == "start":
             if len(operands) != 3:
                 parser.error("session start requires exactly one NAME")
-            args.name = operands[2]
-        elif len(operands) != 2:
-            parser.error(f"session {action} does not accept additional operands")
+            args.session_name = operands[2]
+        elif action in ("end", "status"):
+            if len(operands) > 3:
+                parser.error(f"session {action} accepts at most one NAME")
+            args.session_name = operands[2] if len(operands) == 3 else None
         args.command = "session"
         args.session_action = action
         return
@@ -206,26 +217,53 @@ def _resolve_config(args) -> Config:
 
 
 def _run_session(args, config: Config, diag: Diagnostics) -> int:
-    from summarizer.session.manager import SessionManager
+    """Session management commands. Session policy lives in the session package."""
+    from summarizer.session import SessionManager, render_status
 
-    manager = SessionManager(diag=diag)
+    root = (
+        Path(args.notes_path).expanduser()
+        if getattr(args, "notes_path", None)
+        else Path(config.session.notes_dir).expanduser()
+    )
+    manager = SessionManager(
+        root=root,
+        diag=diag,
+        max_age_hours=config.session.max_age_hours,
+        digest_format=config.session.digest_format,
+    )
     action = args.session_action
+
     if action == "start":
-        manager.start(args.name)
-        print(f"session {args.name!r} started (state: {manager.state_file})")
+        info = manager.start(args.session_name)
+        print(f"session {info.name!r} started (id {info.id})")
+        print(f"  state file: {info.directory / 'state.json'}")
+        print("  runs are recorded when this session is selected:")
+        print(f"    --session {info.name}   |   export SUMMARIZER_SESSION={info.name}")
+        print(f"  or automatically for runs from {info.cwd}")
         return EXIT_OK
+
     if action == "end":
-        ended = manager.end()
-        if ended.name:
-            print(f"session {ended.name!r} ended")
-        else:
-            print("no active session to end")
+        info = manager.end(args.session_name)
+        digest = info.digest_path or info.directory / "digest.md"
+        print(f"session {info.name!r} closed ({info.runs} run(s))")
+        print(f"  digest: {digest}")
         return EXIT_OK
+
     if action == "status":
-        status = manager.status()
-        print(status.describe())
-        print(f"notes dir: {config.session.notes_dir} (enabled={config.session.enabled})")
+        infos = manager.status(args.session_name)
+        if (args.format or "").lower() == "json":
+            import json
+
+            payload = {
+                "schema": "summarizer.session.status.v1",
+                "sessions": [info.to_json() for info in infos],
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(render_status(infos, max_age_hours=config.session.max_age_hours))
+            print(f"sessions root: {root}")
         return EXIT_OK
+
     raise ValueError(f"unknown session action {action!r}")
 
 
@@ -273,6 +311,26 @@ def _run_summarize(args, config: Config, diag: Diagnostics) -> int:
     pipeline = Pipeline(config, diag=diag)
     will_stream = opts.stream and fmt != "json"
 
+    # Session selection happens before the run: an explicit selection that
+    # cannot be honoured fails fast, instead of costing a model call.
+    from summarizer.session import select_session
+
+    session = None
+    if not args.dry_run:
+        session = select_session(
+            root=(
+                Path(args.notes_path).expanduser()
+                if args.notes_path
+                else Path(config.session.notes_dir).expanduser()
+            ),
+            max_age_hours=config.session.max_age_hours,
+            digest_format=config.session.digest_format,
+            enabled=config.session.enabled,
+            explicit=args.session_name,
+            no_session=args.no_session,
+            diag=diag,
+        )
+
     if args.dry_run:
         report = pipeline.dry_run(source, opts=opts)
         text = report.render()
@@ -306,37 +364,16 @@ def _run_summarize(args, config: Config, diag: Diagnostics) -> int:
             sys.stdout.write("\n")
         sys.stdout.flush()
 
-    _maybe_record_session_note(result, config, diag)
-    return EXIT_OK
+    if session is not None:
+        from summarizer.session import record_selected
 
-
-def _maybe_record_session_note(result, config: Config, diag: Diagnostics) -> None:
-    """Append an opt-in session note; never fatal, never leaks a full summary."""
-    if not config.session.enabled:
-        return
-    try:
-        manager = SessionManager(diag=diag)
-        if not manager.status().active:
-            return
-        from summarizer.session.digest import append_note, make_note
-
-        notes_dir = Path(config.session.notes_dir).expanduser()
-        summary = result.summary if isinstance(result.summary, str) else str(result.summary)
-        note = make_note(
-            source=result.document.source,
-            profile=result.profile.name,
-            summary=summary,
-        )
-        append_note(
-            notes_dir,
-            note,
+        record_selected(
+            session=session,
+            result=result,
             digest_format=config.session.digest_format,
-            append_mode=config.session.append_mode,
             diag=diag,
         )
-        diag.verbose_message(f"session note appended to {notes_dir}")
-    except Exception as exc:  # session notes must never break summarization
-        diag.warn(f"could not write session note: {exc}")
+    return EXIT_OK
 
 
 def main(argv: Sequence[str] | None = None) -> int:

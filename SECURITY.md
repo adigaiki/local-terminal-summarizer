@@ -22,6 +22,14 @@ Readers are bounded so a hostile document cannot exhaust memory: `input.max_byte
 
 Residual risk, stated honestly: these limits bound the *extracted text* a PDF produces. A malicious PDF could still consume memory inside the parser while decompressing content streams, before any text is returned; Python cannot safely impose a memory ceiling on itself from inside the process. Bound such input by size (`input.max_bytes`), page count, and your own process limits (for example `systemd-run --scope -p MemoryMax=1G` or `ulimit -v`).
 
+## Sessions
+
+Sessions are opt-in and local. A run is recorded only when a session is explicitly selected — `--session NAME`, `$SUMMARIZER_SESSION`, or the documented same-directory rule (see README "Which session does a run record into?") — and nothing is recorded otherwise, so unrelated terminals cannot inherit a session by accident. There is no daemon, no filesystem watcher, and no process tracking; no shell hook is ever installed automatically.
+
+Session files live under the sessions root (`[session] notes_dir`) as directories per session with restrictive permissions (0700 directories, 0600 files) and contain pointers only: source path, profile, timestamps, document type, page/chunk counts, strategy, duration, and a one-sentence extract capped at 200 characters. Full summaries, prompts, document text, environment variables, and credentials are never written to session files or logs.
+
+Because session data reveals which files were summarized and when, keep the sessions root outside synced or shared locations if that matters to you. Sessions older than `[session] max_age_hours` are flagged by `summarize session status` and are never closed or deleted automatically. Updates are serialized with `flock` and written through atomic replace, so Ctrl-C and concurrent runs cannot corrupt state.
+
 ## Secrets & configuration
 
 Keep configuration outside Git (`~/.config/summarizer/config.toml`, `./summarizer.toml`); `config.example.toml` is the only committed example and contains placeholders only. Never commit API keys or tokens; the project ships none. Machine-specific paths, personal prompt overrides (`/prompts/`), logs, caches, virtualenvs, and editor state are gitignored.

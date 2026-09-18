@@ -16,3 +16,13 @@
 - Rich-format resource safety: `input.max_pdf_pages` is enforced before extraction and `input.max_extracted_bytes` while accumulating page text, alongside the existing byte/line limits.
 - `--format json` exposes a documented, stable provenance structure; provenance never leaks into plain/Markdown output and never enters trusted prompt instructions. `--dry-run` reports reader metadata (type, encoding, size, pages, extracted size, warnings) without contacting an engine.
 - `summarize doctor` reports optional reader capabilities, marking an uninstalled extra with `!` instead of reporting a failure.
+
+# Sessions + Workflow (v0.4)
+
+- Named sessions are directories of plain files (`state.json` + `digest.md` + `digest.json` + lock) under the sessions root: no database, no daemon, no background behavior, no shell hooks installed automatically.
+- Recording is explicit and documented: `--no-session` > `--session NAME` > `$SUMMARIZER_SESSION` > the single active session matching the run's working directory > nothing. Ambiguity is never guessed; explicit selections are validated before the run so a typo never costs a model call.
+- Digests are rendered atomically *from* `state.json` (the source of truth), so an interruption cannot leave a half-written digest, and concurrent writers serialize with `flock`.
+- Run entries are compact pointers (timestamp, source, profile, document type, pages/chunks, strategy, duration, one-sentence extract capped at 200 characters). Full model output, prompts, and document text are never stored.
+- Stale sessions older than `[session] max_age_hours` are flagged in `session status` and never closed or deleted automatically.
+- `session status --format json` emits a stable `summarizer.session.status.v1` document, separate from the summary JSON schema.
+- The pipeline produces a small run event that the session manager consumes; session logic stays out of `cli.py` and the engine client, and remains independent of readers, chunking, and model logic.
