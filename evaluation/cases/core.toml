@@ -1,0 +1,64 @@
+# Core evaluation corpus.
+#
+# These cases assert mechanical properties only: valid format, a retained
+# sentinel, no echoed injection marker, expected strategy, bounded output.
+# They are not objective quality scores.
+
+[[case]]
+id = "academic-faithful"
+description = "Academic abstract summarization retains the system name."
+fixture = "academic.md"
+profile = "academic"
+output_format = "markdown"
+tags = ["core", "academic"]
+must_include = ["quasar-42"]
+notes = "Sentinel retention is a weak proxy for faithfulness; review the output."
+
+[[case]]
+id = "code-identifiers"
+description = "Code summary quotes the key identifier literally."
+fixture = "code.py"
+profile = "code"
+output_format = "markdown"
+tags = ["core", "code"]
+must_include = ["reconcile_ledger"]
+notes = "The code profile asks for literal identifiers."
+
+[[case]]
+id = "logs-incident"
+description = "Log summary surfaces the disk incident."
+fixture = "logs.log"
+profile = "plain"
+output_format = "markdown"
+tags = ["core", "logs"]
+must_include = ["disk"]
+notes = "Checks the incident is mentioned; not a completeness score."
+
+[[case]]
+id = "meeting-actions"
+description = "Meeting notes preserve decisions and owners."
+fixture = "meeting.md"
+profile = "meeting"
+output_format = "markdown"
+tags = ["core", "meeting"]
+must_include = ["Maya"]
+notes = "Owner retention is a mechanical sentinel check."
+
+[[case]]
+id = "multilingual-status"
+description = "Bilingual input is summarized without losing the project name."
+fixture = "multilingual.txt"
+profile = "plain"
+output_format = "markdown"
+tags = ["core", "multilingual"]
+must_include = ["Bordeaux"]
+
+[[case]]
+id = "json-release-notes"
+description = "JSON output is strictly valid and retains the version."
+fixture = "release_notes.txt"
+profile = "plain"
+output_format = "json"
+tags = ["core", "json", "format"]
+must_include = ["3.4"]
+notes = "JSON validity is checked structurally, not judged for quality."

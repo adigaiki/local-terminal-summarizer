@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 from summarizer.config import EngineSettings
+from summarizer.engine.backends import BackendSpec, resolve_backend_spec
 from summarizer.engine.capabilities import (
     CONTEXT_SOURCE_CONFIG,
     CONTEXT_SOURCE_SERVER,
@@ -49,17 +50,14 @@ class OllamaEngine(OpenAICompatEngine):
         self,
         settings: EngineSettings,
         *,
+        spec: BackendSpec | None = None,
         diag: Diagnostics | None = None,
         http: HttpClient | None = None,
     ) -> None:
-        super().__init__(settings, diag=diag, http=http)
-        # When the user configured the plain base URL (no /v1 suffix), the
-        # OpenAI-compatible chat path is still served under /v1/... by Ollama.
+        super().__init__(settings, spec=spec or resolve_backend_spec("ollama"), diag=diag, http=http)
+        # The OpenAI-compatible chat path is still served under /v1/... by
+        # Ollama; the adapter label is always the canonical one.
         self.backend = "ollama"
-
-    def _reasoning_control_capability(self) -> bool:
-        """Ollama's OpenAI-compatible chat endpoint supports this field."""
-        return True
 
     # -- model listing -------------------------------------------------------
 
@@ -198,6 +196,7 @@ class OllamaEngine(OpenAICompatEngine):
         if self._capabilities is None:
             length, source, note = self._detect_context_length()
             caps = EngineCapabilities(
+                backend=self.backend,
                 streaming=True,
                 structured_json=None,  # never assume; probed at request time
                 reasoning_control=True,

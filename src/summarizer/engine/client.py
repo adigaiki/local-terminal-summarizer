@@ -24,6 +24,7 @@ from summarizer.errors import (
     EngineError,
     EngineTimeout,
     EngineUnreachable,
+    Interrupted,
     MalformedResponse,
     ModelNotFound,
 )
@@ -32,6 +33,10 @@ from summarizer.log import Diagnostics
 __all__ = ["HttpClient", "HttpStatusError", "HttpStatusErrorKinds"]
 
 _DEFAULT_CONNECT_TIMEOUT = 5.0
+
+# While waiting for body/stream data we wake up at least this often so a
+# cancellation request is observed promptly without busy-waiting.
+_POLL_INTERVAL = 0.5
 
 
 class HttpStatusError(Exception):
@@ -66,6 +71,8 @@ class HttpClient:
         # Memory bound for response bodies and SSE event buffers. 0 disables.
         self.max_response_bytes = max(0, int(max_response_bytes))
         self.diag = diag
+        # Optional cooperative cancellation token (see summarizer.cancel).
+        self.cancel: object | None = None
 
     def url_for(self, path: str) -> str:
         return f"{self.scheme}://{self.host}:{self.port}{self.base_path}{path}"
@@ -136,6 +143,8 @@ class HttpClient:
             chunks: list[bytes] = []
             total = 0
             while True:
+                if self._cancelled():
+                    raise Interrupted("interrupted")
                 if deadline - time.monotonic() <= 0:
                     raise EngineTimeout("request timed out while reading the response body")
                 if getattr(resp, "fp", None) is None:
@@ -160,6 +169,9 @@ class HttpClient:
             raise EngineTimeout("request timed out while reading the response body") from exc
         except (http.client.IncompleteRead, ConnectionResetError, http.client.HTTPException) as exc:
             raise EngineConnectionFailure(f"connection dropped while reading the response: {exc}") from exc
+
+    def _cancelled(self) -> bool:
+        return bool(getattr(self.cancel, "cancelled", False))
 
     # -- request helpers -----------------------------------------------------
 
@@ -223,13 +235,22 @@ class HttpClient:
             buffer = ""
             buffer_limit = max(self.max_response_bytes, 1_048_576)
             while True:
+                if self._cancelled():
+                    raise Interrupted("interrupted")
                 if deadline - time.monotonic() <= 0:
                     raise EngineTimeout("stream timed out before completion")
-                _set_socket_deadline(conn, deadline)
-                line = resp.readline()
-                if not line:
+                _set_socket_timeout(
+                    conn, min(_POLL_INTERVAL, max(0.1, deadline - time.monotonic())), resp
+                )
+                try:
+                    # read1 returns whatever is available without waiting to
+                    # fill a buffer, so a poll timeout loses no partial event.
+                    data = resp.read1(65536) if hasattr(resp, "read1") else resp.readline()
+                except (socket.timeout, TimeoutError):
+                    continue
+                if not data:
                     break
-                buffer += line.decode("utf-8", "replace")
+                buffer += data.decode("utf-8", "replace") if isinstance(data, bytes) else data
                 if len(buffer) > buffer_limit:
                     raise MalformedResponse(
                         f"streamed event from {path} exceeded {buffer_limit} bytes without a delimiter",
@@ -280,6 +301,21 @@ def _set_socket_deadline(conn: http.client.HTTPConnection, deadline: float) -> N
     sock = getattr(conn, "sock", None)
     if sock is not None:
         sock.settimeout(max(0.1, remaining))
+
+
+def _set_socket_timeout(conn: http.client.HTTPConnection, seconds: float, resp=None) -> None:
+    """Set a short poll timeout without treating it as a request failure.
+
+    ``http.client`` may clear ``conn.sock`` once a response begins
+    (notably for connection-close framing), so fall back to the socket owned
+    by the response's buffered reader.
+    """
+    sock = getattr(conn, "sock", None)
+    if sock is None and resp is not None:
+        raw = getattr(getattr(resp, "fp", None), "raw", None)
+        sock = getattr(raw, "_sock", None)
+    if sock is not None:
+        sock.settimeout(max(0.05, seconds))
 
 
 class HttpStatusErrorKinds:

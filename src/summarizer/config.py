@@ -5,11 +5,21 @@ Precedence (highest wins):
     CLI  ->  environment  ->  project config  ->  user config  ->  built-in defaults
 
 CLI overrides are applied by cli.py on top of the resolved :class:`Config`.
-Project config is `./summarizer.toml` relative to the current working
-directory (deliberately simple for v1; the loader is layered so additional
-discovery can be added without restructuring). User config lives at
-`~/.config/summarizer/config.toml` (or `$XDG_CONFIG_HOME/summarizer/config.toml`).
-`$SUMMARIZER_CONFIG` overrides the user config path.
+User config lives at `~/.config/summarizer/config.toml` (or
+`$XDG_CONFIG_HOME/summarizer/config.toml`); `$SUMMARIZER_CONFIG` overrides that
+path.
+
+Project config is **opt-in**. `./summarizer.toml` is read only when the
+environment asks for it, so a cloned repository cannot silently force a
+surprising model, endpoint or profile on you:
+
+  * `SUMMARIZER_PROJECT_CONFIG=1`      -> read `./summarizer.toml` if present
+  * `SUMMARIZER_PROJECT_CONFIG=/path`  -> read that file
+  * unset                              -> no project config is read
+
+When a project config is read it keeps its documented place in the precedence
+chain. Each resolved value records which layer supplied it, so `--dry-run`
+and `summarize doctor` can show the source without ever printing a secret.
 
 Malformed TOML and type errors raise :class:`ConfigError` with the file path
 and, where available, line/key information. A user's config is never
@@ -22,7 +32,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from summarizer.errors import ConfigError
 
@@ -34,15 +44,31 @@ __all__ = [
     "InputSettings",
     "SessionSettings",
     "UpdateSettings",
+    "CacheSettings",
     "load_config",
     "user_config_path",
     "user_prompt_dir",
     "project_config_path",
+    "project_config_requested",
     "data_dir",
     "sessions_dir",
+    "cache_dir",
+    "MAX_CONCURRENCY",
+    "SOURCE_BUILTIN",
+    "SOURCE_USER",
+    "SOURCE_PROJECT",
+    "SOURCE_ENV",
+    "SOURCE_CLI",
 ]
 
 ENV_PREFIX = "SUMMARIZER_"
+
+# Human-readable labels for the resolved-configuration sources.
+SOURCE_BUILTIN = "built-in defaults"
+SOURCE_USER = "user config"
+SOURCE_PROJECT = "project config"
+SOURCE_ENV = "environment"
+SOURCE_CLI = "command line"
 
 BUILTIN_DEFAULTS: dict[str, Any] = {
     "engine": {
@@ -70,6 +96,9 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "stream": True,
         "lang": None,
         "chunk_strategy": "auto",
+        # Interactive progress on stderr. Always suppressed by --quiet and by
+        # a non-TTY stderr; never written to stdout.
+        "progress": True,
     },
     "chunking": {
         "strategy": "auto",
@@ -79,6 +108,9 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         # Safety valve for very large documents: refuse to plan more chunks
         # than this rather than issuing an unbounded number of model calls.
         "max_chunks": 256,
+        # Bounded parallelism for independent map-stage chunks. 1 preserves
+        # the sequential behaviour exactly. Hard-capped at MAX_CONCURRENCY.
+        "concurrency": 1,
     },
     "input": {
         "max_bytes": 52428800,  # 50 MiB
@@ -105,7 +137,22 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "url": "",
         "public_key_path": "",
     },
+    "cache": {
+        # off | read | write | readwrite. Off by default: no local state is
+        # created unless the user opts in. Only derived summaries and hashes
+        # are stored, never document contents.
+        "mode": "off",
+        "dir": "~/.cache/summarizer",
+        # Bounds so the cache can never grow without limit.
+        "max_entries": 500,
+        "max_bytes": 268435456,  # 256 MiB
+        "max_chunk_bytes": 1048576,  # skip a single oversized result (1 MiB)
+    },
 }
+
+# Hard ceiling for [chunking] concurrency. Bounded so a configuration mistake
+# cannot spawn an unbounded number of worker threads against a local server.
+MAX_CONCURRENCY = 8
 
 # Environment variable -> (section, key) mapping.
 _ENV_MAP: dict[str, tuple[str, str]] = {
@@ -117,11 +164,16 @@ _ENV_MAP: dict[str, tuple[str, str]] = {
     "SUMMARIZER_MAX_TOKENS": ("engine", "max_tokens"),
     "SUMMARIZER_MAX_RESPONSE_BYTES": ("engine", "max_response_bytes"),
     "SUMMARIZER_REASONING_EFFORT": ("engine", "reasoning_effort"),
+    "SUMMARIZER_REASONING": ("engine", "reasoning"),
     "SUMMARIZER_PROFILE": ("defaults", "profile"),
     "SUMMARIZER_FORMAT": ("defaults", "output_format"),
     "SUMMARIZER_LANG": ("defaults", "lang"),
     "SUMMARIZER_CHUNK_STRATEGY": ("defaults", "chunk_strategy"),
     "SUMMARIZER_MAX_CHUNKS": ("chunking", "max_chunks"),
+    "SUMMARIZER_CONCURRENCY": ("chunking", "concurrency"),
+    "SUMMARIZER_PROGRESS": ("defaults", "progress"),
+    "SUMMARIZER_CACHE": ("cache", "mode"),
+    "SUMMARIZER_CACHE_DIR": ("cache", "dir"),
     "SUMMARIZER_MAX_BYTES": ("input", "max_bytes"),
     "SUMMARIZER_MAX_LINES": ("input", "max_lines"),
     "SUMMARIZER_ENCODING": ("input", "encoding"),
@@ -150,6 +202,7 @@ class DefaultsSettings:
     stream: bool = True
     lang: str | None = None
     chunk_strategy: str = "auto"
+    progress: bool = True
 
 
 @dataclass(frozen=True)
@@ -160,6 +213,8 @@ class ChunkingSettings:
     reserve_output_tokens: int = 1000
     # Upper bound on how many chunks a single document may be split into.
     max_chunks: int = 256
+    # Bounded map-stage parallelism; 1 keeps the original sequential behavior.
+    concurrency: int = 1
 
 
 @dataclass(frozen=True)
@@ -193,6 +248,29 @@ class UpdateSettings:
 
 
 @dataclass(frozen=True)
+class CacheSettings:
+    """Optional local cache for reusable intermediate (map) results.
+
+    Off by default. When enabled it stores derived summaries plus hashes that
+    make entries self-invalidating; it never stores the document itself.
+    """
+
+    mode: str = "off"  # off | read | write | readwrite
+    dir: str = "~/.cache/summarizer"
+    max_entries: int = 500
+    max_bytes: int = 268435456
+    max_chunk_bytes: int = 1048576
+
+    @property
+    def read_enabled(self) -> bool:
+        return self.mode in ("read", "readwrite")
+
+    @property
+    def write_enabled(self) -> bool:
+        return self.mode in ("write", "readwrite")
+
+
+@dataclass(frozen=True)
 class Config:
     engine: EngineSettings = field(default_factory=EngineSettings)
     defaults: DefaultsSettings = field(default_factory=DefaultsSettings)
@@ -200,9 +278,25 @@ class Config:
     input: InputSettings = field(default_factory=InputSettings)
     session: SessionSettings = field(default_factory=SessionSettings)
     update: UpdateSettings = field(default_factory=UpdateSettings)
+    cache: CacheSettings = field(default_factory=CacheSettings)
     # Paths of the config files that contributed values, for diagnostics.
     user_config_path: Path | None = None
     project_config_path: Path | None = None
+    # Which layer supplied each dotted key (e.g. "engine.model"). Labels are
+    # SOURCE_* constants plus the concrete file path for config files. Never
+    # contains a value, so it is safe to print.
+    origins: Mapping[str, str] = field(default_factory=dict)
+
+    def origin(self, key: str) -> str:
+        """The layer that supplied ``key`` (``"engine.model"``), if known."""
+        return self.origins.get(key, SOURCE_BUILTIN)
+
+    def with_origins(self, updates: Mapping[str, str]) -> "Config":
+        """Return a copy with origin labels overridden (e.g. by the CLI)."""
+        if not updates:
+            return self
+        merged = {**dict(self.origins), **dict(updates)}
+        return replace(self, origins=merged)
 
     def with_overrides(self, **overrides: Any) -> "Config":
         """Return a copy with per-segment overrides applied.
@@ -213,7 +307,7 @@ class Config:
         """
         replacements: dict[str, Any] = {}
         for key, value in overrides.items():
-            if key in ("engine", "defaults", "chunking", "input", "session", "update"):
+            if key in ("engine", "defaults", "chunking", "input", "session", "update", "cache"):
                 if value is not None:
                     if isinstance(value, dict):
                         current = getattr(self, key)
@@ -244,7 +338,27 @@ def user_prompt_dir() -> Path:
 
 
 def project_config_path() -> Path:
+    """The conventional project config location (whether or not it is read)."""
     return Path.cwd() / "summarizer.toml"
+
+
+_PROJECT_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def project_config_requested() -> Path | None:
+    """Resolve the opt-in project config path.
+
+    Project config is opt-in so that cloning a repository cannot silently
+    change your model, endpoint or profile. `SUMMARIZER_PROJECT_CONFIG` may be
+    a truthy flag (read `./summarizer.toml` when present) or an explicit path.
+    Returns ``None`` when the user has not opted in.
+    """
+    value = os.environ.get("SUMMARIZER_PROJECT_CONFIG", "").strip()
+    if not value:
+        return None
+    if value.lower() in _PROJECT_TRUTHY:
+        return project_config_path()
+    return Path(value).expanduser()
 
 
 def data_dir() -> Path:
@@ -256,6 +370,14 @@ def data_dir() -> Path:
 
 def sessions_dir() -> Path:
     return data_dir() / "sessions"
+
+
+def cache_dir() -> Path:
+    """Default XDG cache location for the optional local cache."""
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    if cache_home:
+        return Path(cache_home) / "summarizer"
+    return Path.home() / ".cache" / "summarizer"
 
 
 # ---------------------------------------------------------------------------
@@ -296,12 +418,17 @@ def load_env_layer() -> dict[str, Any]:
 
 
 def _convert_env(name: str, value: str) -> Any:
+    if name == "SUMMARIZER_PROGRESS":
+        return value.strip().lower() in ("1", "true", "yes", "on")
     if name in (
         "SUMMARIZER_TIMEOUT",
         "SUMMARIZER_RETRIES",
         "SUMMARIZER_MAX_TOKENS",
+        "SUMMARIZER_MAX_RESPONSE_BYTES",
         "SUMMARIZER_MAX_BYTES",
         "SUMMARIZER_MAX_LINES",
+        "SUMMARIZER_MAX_CHUNKS",
+        "SUMMARIZER_CONCURRENCY",
     ):
         try:
             return int(value)
@@ -321,21 +448,109 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             out[key] = value
     return out
+
+
+def _canonicalize_layer(layer: dict[str, Any], *, label: str) -> dict[str, Any]:
+    """Normalise within a single layer before merging.
+
+    ``reasoning`` is accepted as a generic alias for ``reasoning_effort`` so
+    the documented ``[engine] reasoning = "none"`` spelling works. Setting
+    both to different values in the same layer is a configuration error.
+    """
+    engine = layer.get("engine")
+    if isinstance(engine, dict) and "reasoning" in engine:
+        alias = engine.pop("reasoning")
+        if "reasoning_effort" in engine and engine["reasoning_effort"] != alias:
+            raise ConfigError(
+                f"{label} sets both [engine] reasoning and reasoning_effort "
+                "to different values",
+                hint="set only one of them",
+            )
+        engine["reasoning_effort"] = alias
+    return layer
+
+
+def _layer_has(layer: dict[str, Any], section: str, key: str) -> bool:
+    values = layer.get(section)
+    return isinstance(values, dict) and key in values
+
+
+def _layer_label(kind: str, path: Path | None) -> str:
+    if path is None:
+        return SOURCE_BUILTIN
+    return f"{kind} ({path})"
+
+
+def _compute_origins(
+    *,
+    env_layer: dict[str, Any],
+    project_layer: dict[str, Any],
+    user_layer: dict[str, Any],
+    project_label: str,
+    user_label: str,
+) -> dict[str, str]:
+    """Map dotted keys to the highest-precedence layer that supplied them."""
+    origins: dict[str, str] = {}
+    # Highest precedence first; setdefault keeps the winner.
+    ordered = [
+        (SOURCE_ENV, env_layer),
+        (project_label, project_layer),
+        (user_label, user_layer),
+        (SOURCE_BUILTIN, BUILTIN_DEFAULTS),
+    ]
+    for label, layer in ordered:
+        for section, values in layer.items():
+            if not isinstance(values, dict):
+                continue
+            for key in values:
+                origins.setdefault(f"{section}.{key}", label)
+    return origins
+
+
 def load_config(*, user_path: Path | None = None, project_path: Path | None = None) -> Config:
-    """Resolve config from defaults, user file, project file, and environment."""
+    """Resolve config from defaults, user file, project file, and environment.
+
+    ``project_path`` defaults to :func:`project_config_requested`: project
+    config is opt-in, so without ``SUMMARIZER_PROJECT_CONFIG`` no project file
+    is read and a cloned repository cannot change your engine settings.
+    """
     user_path = user_path if user_path is not None else user_config_path()
-    project_path = project_path if project_path is not None else project_config_path()
+    if project_path is None:
+        project_path = project_config_requested()
+
+    user_layer = _canonicalize_layer(_load_layer(user_path), label="user config")
+    project_layer = _canonicalize_layer(_load_layer(project_path), label="project config")
+    env_layer = _canonicalize_layer(load_env_layer(), label="environment")
+
+    # Endpoint discovery: a backend's documented loopback default is used
+    # only when no layer ever configured an endpoint, so switching backend
+    # without setting an endpoint lands on the right local port.
+    endpoint_explicit = any(
+        _layer_has(layer, "engine", "endpoint")
+        for layer in (env_layer, project_layer, user_layer)
+    )
 
     merged: dict[str, Any] = dict(BUILTIN_DEFAULTS)
-    user_layer = _load_layer(user_path)
-    project_layer = _load_layer(project_path)
-    env_layer = load_env_layer()
     merged = _deep_merge(merged, user_layer)
     merged = _deep_merge(merged, project_layer)
     merged = _deep_merge(merged, env_layer)
 
+    if not endpoint_explicit:
+        # Imported lazily: the engine package imports this module through the
+        # factory, so a module-level import here would be circular.
+        from summarizer.engine.backends import (
+            canonical_backend_name,
+            default_endpoint_for_backend,
+        )
+
+        backend = merged["engine"].get("backend")
+        if isinstance(backend, str):
+            default_endpoint = default_endpoint_for_backend(canonical_backend_name(backend))
+            if default_endpoint:
+                merged["engine"]["endpoint"] = default_endpoint
+
     def ctx(key: str) -> str:
-        where = _find_key_location(key, user_layer, project_layer)
+        where = _find_key_location(key, env_layer, project_layer, user_layer)
         return f"config key {key!r}" + (f" ({where})" if where else "")
 
     engine = EngineSettings(
@@ -348,6 +563,7 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         temperature=_float(merged["engine"], "temperature", ctx, minimum=0.0, maximum=2.0),
         max_tokens=_int(merged["engine"], "max_tokens", ctx, minimum=1),
         reasoning_effort=_reasoning_effort(merged["engine"], "reasoning_effort", ctx),
+        max_response_bytes=_int(merged["engine"], "max_response_bytes", ctx, minimum=0),
     )
     defaults = DefaultsSettings(
         profile=_str(merged["defaults"], "profile", ctx),
@@ -355,6 +571,7 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         stream=_bool(merged["defaults"], "stream", ctx),
         lang=_optional_str(merged["defaults"], "lang", ctx),
         chunk_strategy=_str(merged["defaults"], "chunk_strategy", ctx),
+        progress=_bool(merged["defaults"], "progress", ctx),
     )
     chunking = ChunkingSettings(
         strategy=_str(merged["chunking"], "strategy", ctx),
@@ -362,6 +579,7 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         overlap_tokens=_int(merged["chunking"], "overlap_tokens", ctx, minimum=0),
         reserve_output_tokens=_int(merged["chunking"], "reserve_output_tokens", ctx, minimum=0),
         max_chunks=_int(merged["chunking"], "max_chunks", ctx, minimum=1),
+        concurrency=_int(merged["chunking"], "concurrency", ctx, minimum=1, maximum=MAX_CONCURRENCY),
     )
     input_settings = InputSettings(
         max_bytes=_int(merged["input"], "max_bytes", ctx, minimum=1),
@@ -385,6 +603,25 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         url=_str(merged["update"], "url", ctx),
         public_key_path=_str(merged["update"], "public_key_path", ctx),
     )
+    cache = CacheSettings(
+        mode=_cache_mode(merged["cache"], "mode", ctx),
+        dir=_str(merged["cache"], "dir", ctx),
+        max_entries=_int(merged["cache"], "max_entries", ctx, minimum=1, maximum=1000000),
+        max_bytes=_int(merged["cache"], "max_bytes", ctx, minimum=0),
+        max_chunk_bytes=_int(merged["cache"], "max_chunk_bytes", ctx, minimum=0),
+    )
+
+    origins = _compute_origins(
+        env_layer=env_layer,
+        project_layer=project_layer,
+        user_layer=user_layer,
+        project_label=_layer_label(SOURCE_PROJECT, project_path if project_layer else None),
+        user_label=_layer_label(SOURCE_USER, user_path if user_layer else None),
+    )
+    # `endpoint` may have been filled from a backend default rather than a
+    # layer; record that honestly instead of claiming the built-in default.
+    if not endpoint_explicit:
+        origins["engine.endpoint"] = SOURCE_BUILTIN
 
     return Config(
         engine,
@@ -393,14 +630,25 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         input_settings,
         session,
         update,
-        user_config_path=user_path if user_path.is_file() else None,
-        project_config_path=project_path if project_path.is_file() else None,
+        cache,
+        user_config_path=user_path if user_path and user_path.is_file() else None,
+        project_config_path=project_path if project_path and project_path.is_file() else None,
+        origins=origins,
     )
 
 
-def _find_key_location(key: str, user_layer: dict[str, Any], project_layer: dict[str, Any]) -> str | None:
-    """Report the highest-precedence file that supplied this key."""
-    for layer, label in ((project_layer, "project config"), (user_layer, "user config")):
+def _find_key_location(
+    key: str,
+    env_layer: dict[str, Any],
+    project_layer: dict[str, Any],
+    user_layer: dict[str, Any],
+) -> str | None:
+    """Report the highest-precedence layer that supplied this key."""
+    for layer, label in (
+        (env_layer, "environment"),
+        (project_layer, "project config"),
+        (user_layer, "user config"),
+    ):
         for section_values in layer.values():
             if isinstance(section_values, dict) and key in section_values:
                 return label
@@ -471,3 +719,25 @@ def _reasoning_effort(table: dict[str, Any], key: str, ctx) -> str:
             f"{ctx(key)} must be one of: {', '.join(allowed)}; got {value!r}"
         )
     return value
+
+
+_CACHE_MODE_ALIASES = {
+    "off": "off",
+    "none": "off",
+    "false": "off",
+    "read": "read",
+    "write": "write",
+    "readwrite": "readwrite",
+    "on": "readwrite",
+    "true": "readwrite",
+    "yes": "readwrite",
+}
+
+
+def _cache_mode(table: dict[str, Any], key: str, ctx) -> str:
+    value = _str(table, key, ctx).lower()
+    if value not in _CACHE_MODE_ALIASES:
+        raise ConfigError(
+            f"{ctx(key)} must be one of: off, read, write, readwrite; got {value!r}"
+        )
+    return _CACHE_MODE_ALIASES[value]

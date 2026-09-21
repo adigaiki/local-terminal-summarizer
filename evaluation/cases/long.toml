@@ -1,0 +1,16 @@
+# Long-document behaviour. The case forces small chunks so a small local
+# model exercises the real map-reduce path without an enormous fixture.
+
+[[case]]
+id = "long-mapreduce"
+description = "Oversized input is summarized via map-reduce and keeps the subject."
+fixture = "long_report.md"
+profile = "plain"
+output_format = "markdown"
+tags = ["long", "mapreduce"]
+max_tokens_per_chunk = 150
+reserve_output_tokens = 120
+max_chunks = 32
+expect_strategy = "mapreduce"
+must_include = ["Halyard"]
+notes = "Exercises map + reduce rounds against a small context."

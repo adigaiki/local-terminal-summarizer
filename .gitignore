@@ -91,6 +91,13 @@ logs/
 scratch/
 
 # ---------------------------------------------------------------------------
+# Local cache / checkpoints (default is the XDG cache dir; ignore a
+# repo-local one too, since it may contain derived summaries)
+# ---------------------------------------------------------------------------
+/.summarizer-cache/
+/summarizer-cache/
+
+# ---------------------------------------------------------------------------
 # Editor / IDE state
 # ---------------------------------------------------------------------------
 .idea/

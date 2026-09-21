@@ -2,8 +2,9 @@
 this process's memory without bound.
 
 The default 32 MiB cap is config plumbing; these tests prove enforcement with
-small limits against a real loopback HTTP server (never 0.0.0.0), covering the
-non-streaming body, the SSE event buffer, and the documented disable switch.
+small limits against a real loopback HTTP server (never a wildcard bind),
+covering the non-streaming body, the SSE event buffer, and the documented
+disable switch.
 """
 
 from __future__ import annotations

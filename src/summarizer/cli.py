@@ -13,16 +13,27 @@ we explain and exit 1. `summarize -` is the explicit way to read stdin.
 from __future__ import annotations
 
 import argparse
+import os
+import signal
 import sys
 import traceback
 from pathlib import Path
 from typing import Callable, NoReturn, Sequence
 
 from summarizer import __version__
-from summarizer.config import Config, load_config
-from summarizer.errors import SummarizerError
+from summarizer.cancel import CancelToken
+from summarizer.config import (
+    SOURCE_BUILTIN,
+    SOURCE_CLI,
+    MAX_CONCURRENCY,
+    Config,
+    load_config,
+)
+from summarizer.engine.backends import canonical_backend_name, default_endpoint_for_backend
+from summarizer.errors import ConfigError, SummarizerError
 from summarizer.log import Diagnostics
 from summarizer.pipeline import Pipeline, PipelineOptions
+from summarizer.progress import build_progress
 from summarizer.session import SessionManager
 
 __all__ = ["main", "build_parser"]
@@ -64,7 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
             "  git diff | summarize --profile code --quiet\n"
             "  summarize README.md --format json | jq\n"
             "  summarize README.md --dry-run\n"
+            "  summarize --stats article.md\n"
             "  summarize doctor\n"
+            "  summarize models\n"
+            "  summarize profiles\n"
+            "  summarize config show\n"
+            "  summarize cache status\n"
+            "  summarize completions bash\n"
+            "  summarize evaluate --model qwen3:8b\n"
             "  summarize session start research\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -77,7 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
     # commands below.
     parser.add_argument(
         "operands", nargs="*", default=[], metavar="INPUT",
-        help="file to summarize; omit or use '-' to read stdin; commands: doctor, session",
+        help="file to summarize; omit or use '-' to read stdin; commands: "
+             "doctor, models, profiles, config, cache, session, evaluate, completions",
     )
     parser.add_argument(
         "--profile", metavar="NAME", default=None,
@@ -91,7 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--endpoint", metavar="URL", default=None,
                         help="local LLM server endpoint")
     parser.add_argument("--backend", metavar="NAME", default=None,
-                        help="engine backend: ollama or openai (OpenAI-compatible)")
+                        help="engine backend adapter: ollama, openai-compatible "
+                             "(alias openai), llama.cpp, or lmstudio")
     parser.add_argument("--no-stream", action="store_true",
                         help="do not stream output tokens live")
     parser.add_argument("--quiet", "-q", action="store_true",
@@ -121,6 +141,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="error on oversized input instead of map-reduce chunking")
     parser.add_argument("--chunk-strategy", metavar="STRATEGY", default=None,
                         help="chunking metric: chars, tokens, or auto")
+    parser.add_argument("--concurrency", type=int, metavar="N", default=None,
+                        help="bounded parallel map workers (default 1; max 8)")
+    parser.add_argument("--cache", metavar="MODE", default=None,
+                        help="cache mode override: off, read, write, or readwrite")
+    parser.add_argument("--stats", action="store_true",
+                        help="print execution statistics to stderr (and into "
+                             "JSON output when --format json)")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="disable the progress display (stderr)")
     parser.add_argument("--encoding", metavar="NAME", default=None,
                         help="input encoding (default: utf-8 with documented fallback)")
     parser.add_argument("--ocr", action="store_true",
@@ -137,6 +166,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="debug diagnostics (adds tracebacks)")
     parser.add_argument("--check-update", action="store_true",
                         help="check for a newer release (explicit network operation)")
+    parser.add_argument("--repeats", type=int, metavar="N", default=1,
+                        help="evaluate: run each case N times (default 1)")
+    parser.add_argument("--tags", metavar="TAG[,TAG]", default=None,
+                        help="evaluate: only run cases carrying any of these tags")
+    parser.add_argument("--eval-dir", metavar="PATH", default=None,
+                        help="evaluate: directory holding fixtures/ and cases/ "
+                             "(default: the repository evaluation/ directory)")
+    parser.add_argument("--names", action="store_true",
+                        help="profiles: print only profile names, one per line")
     return parser
 
 
@@ -153,6 +191,38 @@ def _classify_operands(parser: argparse.ArgumentParser, args) -> None:
         if len(operands) != 1:
             parser.error("doctor does not accept additional operands")
         args.command = "doctor"
+        return
+    if operands[0] == "models":
+        if len(operands) != 1:
+            parser.error("models does not accept additional operands")
+        args.command = "models"
+        return
+    if operands[0] == "evaluate":
+        args.command = "evaluate"
+        args.eval_case_ids = list(operands[1:])
+        return
+    if operands[0] == "profiles":
+        if len(operands) != 1:
+            parser.error("profiles does not accept additional operands")
+        args.command = "profiles"
+        return
+    if operands[0] == "config":
+        if len(operands) != 2 or operands[1] not in ("show", "path", "validate"):
+            parser.error("config requires one of: show, path, validate")
+        args.command = "config"
+        args.config_action = operands[1]
+        return
+    if operands[0] == "cache":
+        if len(operands) != 2 or operands[1] not in ("status", "path", "clear"):
+            parser.error("cache requires one of: status, path, clear")
+        args.command = "cache"
+        args.cache_action = operands[1]
+        return
+    if operands[0] == "completions":
+        if len(operands) != 2 or operands[1] not in ("bash", "zsh", "fish"):
+            parser.error("completions requires one of: bash, zsh, fish")
+        args.command = "completions"
+        args.completion_shell = operands[1]
         return
     if operands[0] == "session":
         if len(operands) < 2:
@@ -194,25 +264,61 @@ def _print_error(diag: Diagnostics, exc: BaseException) -> None:
 
 
 def _resolve_config(args) -> Config:
-    """Load configuration, applying CLI-level engine overrides on top."""
+    """Load configuration, applying CLI-level engine overrides on top.
+
+    Precedence is CLI -> environment -> project config -> user config ->
+    built-in defaults. Every value overridden here is labelled with its
+    source so `--dry-run` and `doctor` can report where it came from without
+    printing the value of anything sensitive.
+    """
     config = load_config()
     overrides: dict[str, object] = {}
+    origins: dict[str, str] = {}
+
+    def override(key: str, value: object) -> None:
+        overrides[key] = value
+        origins[f"engine.{key}"] = SOURCE_CLI
+
     if args.backend:
-        overrides["backend"] = args.backend
+        override("backend", args.backend)
     if args.endpoint:
-        overrides["endpoint"] = args.endpoint
+        override("endpoint", args.endpoint)
+    elif args.backend and config.origin("engine.endpoint") == SOURCE_BUILTIN:
+        # Choosing a backend without naming an endpoint should land on that
+        # backend's documented loopback default rather than another backend's.
+        default_endpoint = default_endpoint_for_backend(canonical_backend_name(args.backend))
+        if default_endpoint:
+            override("endpoint", default_endpoint)
     if args.model:
-        overrides["model"] = args.model
+        override("model", args.model)
     if args.timeout_seconds:
-        overrides["timeout_seconds"] = args.timeout_seconds
+        override("timeout_seconds", args.timeout_seconds)
     if args.retries is not None:
-        overrides["retries"] = args.retries
+        override("retries", args.retries)
     if args.max_tokens is not None:
-        overrides["max_tokens"] = args.max_tokens
+        override("max_tokens", args.max_tokens)
     if args.reasoning_effort is not None:
-        overrides["reasoning_effort"] = args.reasoning_effort
+        override("reasoning_effort", args.reasoning_effort)
     if overrides:
-        config = config.with_overrides(engine=overrides)
+        config = config.with_overrides(engine=overrides).with_origins(origins)
+    if args.concurrency is not None:
+        if not 1 <= args.concurrency <= max(1, MAX_CONCURRENCY):
+            raise ConfigError(
+                f"--concurrency must be between 1 and {max(1, MAX_CONCURRENCY)}, "
+                f"got {args.concurrency}"
+            )
+        config = config.with_overrides(
+            chunking={"concurrency": args.concurrency}
+        ).with_origins({"chunking.concurrency": SOURCE_CLI})
+    if args.cache:
+        mode = args.cache.strip().lower()
+        if mode not in ("off", "read", "write", "readwrite"):
+            raise ConfigError(
+                f"--cache must be one of: off, read, write, readwrite; got {args.cache!r}"
+            )
+        config = config.with_overrides(cache={"mode": mode}).with_origins(
+            {"cache.mode": SOURCE_CLI}
+        )
     return config
 
 
@@ -276,7 +382,41 @@ def _run_update_check(config: Config, diag: Diagnostics) -> int:
     return EXIT_OK
 
 
-def _run_summarize(args, config: Config, diag: Diagnostics) -> int:
+def _print_stats(result, *, stream) -> None:
+    stats = getattr(result, "stats", None) or {}
+    if not stats:
+        return
+    lines = ["Stats:"]
+    lines.append(
+        f"  input:  {stats.get('input_bytes', 0)} bytes "
+        f"(~{stats.get('input_tokens_est', 0)} tokens, {stats.get('input_chars', 0)} chars)"
+    )
+    lines.append(f"  chunks: {stats.get('chunks', 0)} (concurrency {stats.get('concurrency', 1)})")
+    if stats.get("cached_chunks"):
+        lines.append(f"  reused: {stats['cached_chunks']} cached chunk(s)")
+    for key, label in (
+        ("map_seconds", "map"),
+        ("reduce_seconds", "reduce"),
+        ("generation_seconds", "generation"),
+        ("total_seconds", "total"),
+    ):
+        value = stats.get(key)
+        if isinstance(value, (int, float)):
+            lines.append(f"  {label}: {value:.3f}s")
+    if stats.get("generated_tokens_est") is not None:
+        lines.append(f"  generated: ~{stats['generated_tokens_est']} tokens (estimated)")
+    if stats.get("tokens_per_second_est"):
+        lines.append(f"  throughput: ~{stats['tokens_per_second_est']} tok/s (estimate)")
+    usage = getattr(getattr(result, "engine", None), "last_usage", None)
+    if usage and usage.get("completion_tokens") is not None:
+        lines.append(
+            f"  backend-reported output tokens (last request): {usage['completion_tokens']}"
+        )
+    stream.write("\n".join(lines) + "\n")
+    stream.flush()
+
+
+def _run_summarize(args, config: Config, diag: Diagnostics, *, cancel: CancelToken | None = None) -> int:
     source = args.input
     if source == "-":
         source = None
@@ -307,8 +447,12 @@ def _run_summarize(args, config: Config, diag: Diagnostics) -> int:
         encoding=args.encoding or None,
         context_file=args.context,
         ocr=args.ocr,
+        stats=bool(args.stats),
     )
-    pipeline = Pipeline(config, diag=diag)
+    reporter = build_progress(
+        diag, enabled=config.defaults.progress and not args.no_progress
+    )
+    pipeline = Pipeline(config, diag=diag, cancel=cancel, progress=reporter)
     will_stream = opts.stream and fmt != "json"
 
     # Session selection happens before the run: an explicit selection that
@@ -364,9 +508,14 @@ def _run_summarize(args, config: Config, diag: Diagnostics) -> int:
             sys.stdout.write("\n")
         sys.stdout.flush()
 
+    if args.stats:
+        _print_stats(result, stream=sys.stderr)
+
     if session is not None:
         from summarizer.session import record_selected
 
+        if cancel is not None:
+            cancel.raise_if_cancelled()
         record_selected(
             session=session,
             result=result,
@@ -374,6 +523,33 @@ def _run_summarize(args, config: Config, diag: Diagnostics) -> int:
             diag=diag,
         )
     return EXIT_OK
+
+
+def _install_sigint(cancel: CancelToken):
+    """Cancel the run on Ctrl-C and keep the existing KeyboardInterrupt flow."""
+
+    def handler(signum, frame):  # noqa: ARG001 - signal API
+        cancel.cancel()
+        raise KeyboardInterrupt
+
+    try:
+        return signal.signal(signal.SIGINT, handler)
+    except (ValueError, OSError, AttributeError):  # not the main thread
+        return None
+
+
+def _quiet_broken_pipe() -> None:
+    """Point stdout at /dev/null so interpreter shutdown cannot complain."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+    except Exception:
+        pass
+    try:
+        sys.stdout.close()
+    except Exception:
+        pass
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -392,6 +568,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.max_tokens is not None and args.max_tokens < 1:
         diag.error("--max-tokens must be at least 1")
         return EXIT_INPUT
+    if args.concurrency is not None and not 1 <= args.concurrency <= max(1, MAX_CONCURRENCY):
+        diag.error(f"--concurrency must be between 1 and {max(1, MAX_CONCURRENCY)}")
+        return EXIT_INPUT
 
     # Malformed configuration must produce a useful error (exit 3).
     try:
@@ -405,16 +584,44 @@ def main(argv: Sequence[str] | None = None) -> int:
             traceback.print_exc()
         return EXIT_CONFIG
 
+    cancel = CancelToken()
+    previous_sigint = _install_sigint(cancel)
     try:
         if args.command == "doctor":
             from summarizer.doctor import run_doctor
 
             return run_doctor(config, diag=diag)
+        if args.command == "models":
+            from summarizer.doctor import run_models
+
+            return run_models(
+                config, diag=diag, as_json=(args.format or "").lower() == "json"
+            )
+        if args.command == "profiles":
+            from summarizer.introspect import run_profiles
+
+            return run_profiles(args, config, diag)
+        if args.command == "config":
+            from summarizer.introspect import run_config
+
+            return run_config(args, config, diag)
+        if args.command == "completions":
+            from summarizer.introspect import run_completions
+
+            return run_completions(args, config, diag)
+        if args.command == "cache":
+            from summarizer.cache.cli import run_cache
+
+            return run_cache(args, config, diag)
+        if args.command == "evaluate":
+            from summarizer.evaluation.cli import run_evaluate
+
+            return run_evaluate(args, config, diag)
         if args.command == "session":
             return _run_session(args, config, diag)
         if args.check_update:
             return _run_update_check(config, diag)
-        return _run_summarize(args, config, diag)
+        return _run_summarize(args, config, diag, cancel=cancel)
     except SummarizerError as exc:
         _print_error(diag, exc)
         if args.debug:
@@ -424,11 +631,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         diag.error("interrupted")
         return EXIT_INTERRUPTED
     except BrokenPipeError:
-        # A downstream consumer (e.g. `head`) closed the pipe; exit quietly.
-        try:
-            sys.stdout.close()
-        except Exception:
-            pass
+        # A downstream consumer (e.g. `head`) closed the pipe; exit quietly
+        # without a traceback and without a shutdown-time flush error.
+        _quiet_broken_pipe()
         return 141  # strict SIGPIPE convention
     except Exception as exc:
         diag.error(f"unexpected error: {type(exc).__name__}: {exc}")
@@ -436,6 +641,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.debug:
             traceback.print_exc()
         return EXIT_INPUT
+    finally:
+        if previous_sigint is not None:
+            try:
+                signal.signal(signal.SIGINT, previous_sigint)
+            except Exception:  # pragma: no cover
+                pass
 
 
 if __name__ == "__main__":

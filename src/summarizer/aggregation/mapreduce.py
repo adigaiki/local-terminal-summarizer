@@ -20,8 +20,10 @@ re-combined by the model under a distinct instruction set.
 
 from __future__ import annotations
 
-from typing import Iterator, Sequence
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from typing import Callable, Iterator, Sequence
 
+from summarizer.cancel import CancelToken
 from summarizer.chunking.splitter import Chunk
 from summarizer.chunking.token import estimate_chars_for_tokens, estimate_tokens
 from summarizer.engine.base import Engine
@@ -132,7 +134,10 @@ class MapReduce:
         context: str | None,
         lang: str | None,
         output_format: str,
+        cancel: CancelToken | None = None,
     ) -> str:
+        if cancel is not None:
+            cancel.raise_if_cancelled()
         prompt = self.builder.build(
             profile=profile,
             document_text=chunk.text,
@@ -155,20 +160,119 @@ class MapReduce:
         context: str | None,
         lang: str | None,
         output_format: str,
+        concurrency: int = 1,
+        cancel: CancelToken | None = None,
+        on_result: Callable[[int, str], None] | None = None,
+        cached: dict[int, str] | None = None,
     ) -> list[str]:
-        """Run the map stage for all chunks, returning interim summaries."""
-        summaries: list[str] = []
-        for chunk in chunks:
-            summaries.append(
-                self.map_step(
+        """Run the map stage for all chunks, returning interim summaries.
+
+        ``concurrency`` > 1 runs independent chunks in a bounded thread pool.
+        Results are always assembled in chunk order regardless of completion
+        order, so provenance and the reduce stage are deterministic. The
+        default is 1, which is exactly the original sequential behavior.
+
+        ``cached`` supplies already-completed summaries to reuse (checkpoint/
+        resume); ``on_result`` is called for each newly generated result so
+        the caller can persist it. Failures are collected and the lowest-index
+        failure is raised, after cancelling pending work.
+        """
+        cached = cached or {}
+        total = len(chunks)
+        summaries: list[str | None] = [None] * total
+        for index, summary in cached.items():
+            if 0 <= index < total:
+                summaries[index] = summary
+
+        pending = [chunk for chunk in chunks if chunk.index not in cached]
+        if not pending:
+            return [summary if summary is not None else "" for summary in summaries]
+
+        if concurrency <= 1:
+            for chunk in pending:
+                if cancel is not None:
+                    cancel.raise_if_cancelled()
+                summary = self.map_step(
                     chunk,
                     profile=profile,
                     context=context,
                     lang=lang,
                     output_format=output_format,
+                    cancel=cancel,
                 )
+                summaries[chunk.index] = summary
+                if on_result is not None:
+                    on_result(chunk.index, summary)
+        else:
+            self._run_map_parallel(
+                pending,
+                summaries,
+                profile=profile,
+                context=context,
+                lang=lang,
+                output_format=output_format,
+                concurrency=concurrency,
+                cancel=cancel,
+                on_result=on_result,
             )
-        return summaries
+        return [summary if summary is not None else "" for summary in summaries]
+
+    def _run_map_parallel(
+        self,
+        pending: list[Chunk],
+        summaries: list[str | None],
+        *,
+        profile: Profile,
+        context: str | None,
+        lang: str | None,
+        output_format: str,
+        concurrency: int,
+        cancel: CancelToken | None,
+        on_result: Callable[[int, str], None] | None,
+    ) -> None:
+        """Bounded parallel map. Deterministic ordering and error selection."""
+        errors: dict[int, BaseException] = {}
+
+        def worker(chunk: Chunk) -> str:
+            if cancel is not None:
+                cancel.raise_if_cancelled()
+            return self.map_step(
+                chunk,
+                profile=profile,
+                context=context,
+                lang=lang,
+                output_format=output_format,
+                cancel=cancel,
+            )
+
+        futures = {}
+        pool = ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="summarize-map")
+        try:
+            for chunk in pending:
+                if cancel is not None:
+                    cancel.raise_if_cancelled()
+                futures[pool.submit(worker, chunk)] = chunk.index
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    summary = future.result()
+                except CancelledError:
+                    continue
+                except BaseException as exc:  # collected, not raised per-thread
+                    errors[index] = exc
+                    for pending_future in futures:
+                        pending_future.cancel()
+                    continue
+                summaries[index] = summary
+                if on_result is not None:
+                    on_result(index, summary)
+        finally:
+            # Do not wait for queued work that has not started.
+            pool.shutdown(wait=True, cancel_futures=True)
+        if errors:
+            # Deterministic: always report the earliest chunk that failed.
+            first = min(errors)
+            raise errors[first]
 
     # -- reduce ------------------------------------------------------------
 

@@ -1,0 +1,10 @@
+Compte rendu / Status note
+
+Le projet Bordeaux a livré sa première version interne le 3 mars. L'équipe a
+réduit le temps de démarrage de 40 %. Deux incidents ont été observés en
+production ; aucun n'a affecté les données clients.
+
+The Bordeaux project shipped its first internal release on 3 March. The team
+cut cold-start time by 40 percent. Two incidents were observed in production;
+neither affected customer data. The next milestone is a public beta, and the
+remaining open question is whether the caching layer should be replaced.

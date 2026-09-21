@@ -1,0 +1,15 @@
+# Repository safety allowlist
+#
+# Each line is:  path-fragment | rule | reason
+# `rule` may be `*`. Keep reasons specific; an allowlist entry is a claim
+# that a human reviewed the match and it is safe to commit.
+#
+# This file is intentionally tiny. If it starts growing, prefer removing the
+# matching text over allowing it.
+
+# The checker necessarily contains the very patterns it searches for.
+scripts/check_repo_safety.py | * | the leak guard's own pattern definitions
+
+# The guard's own tests deliberately contain example secrets/paths to prove
+# they are detected. The examples are fake and never leave the test process.
+tests/test_repo_guard.py | * | fake leak samples used to test the guard

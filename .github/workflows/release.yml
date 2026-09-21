@@ -1,0 +1,64 @@
+# Release artifacts for a tagged version.
+#
+# This job builds a source distribution and a wheel, writes SHA256 checksums,
+# and attaches them to a GitHub release. It needs no Ollama server, no GPU, and
+# no model: it only packages the code that the test workflow already exercises.
+#
+# It does NOT install anything on a user's machine and there is no self-update
+# mechanism; a user installs with pipx/pip and upgrades explicitly.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and publish release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build setuptools wheel
+
+      - name: Build sdist and wheel
+        # --no-isolation: use the just-installed build backend, no network.
+        run: python -m build --no-isolation
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error

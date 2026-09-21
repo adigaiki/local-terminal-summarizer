@@ -12,13 +12,23 @@
 # this directory and `~/.config/summarizer/config.toml` are both gitignored;
 # treat them like dotfiles, not like project source.
 #
+# A project `./summarizer.toml` is only read when you opt in:
+#   SUMMARIZER_PROJECT_CONFIG=1 summarize ...
+# Without that, a cloned repository cannot change your model or endpoint.
+#
 # The endpoint documented here is the loopback address of a LOCAL model server
 # running on your own machine. There is no cloud endpoint, no API key, and no
 # account: point `endpoint` at whatever local server you already run.
 # ---------------------------------------------------------------------------
 
 [engine]
-# Which local backend to talk to: "ollama" or "openai" (OpenAI-compatible).
+# Which local backend to talk to. Implemented adapters:
+#   "ollama"              Ollama (native model/context discovery)
+#   "openai-compatible"   generic OpenAI Chat Completions server (alias: "openai")
+#   "llama.cpp"           llama.cpp server (alias: "llama-cpp")
+#   "lmstudio"            LM Studio (alias: "lm-studio")
+# If you never set `endpoint`, a backend uses its documented loopback default
+# (llama.cpp -> :8080, LM Studio -> :1234, Ollama -> :11434).
 backend = "ollama"
 # Loopback address of YOUR local server. Never a remote/cloud service.
 endpoint = "http://localhost:11434"
@@ -32,8 +42,11 @@ context_length = 0
 temperature = 0.3
 # Hard cap on generated tokens for every request (map, reduce, and direct).
 max_tokens = 1024
-# none | low | medium | high -- sent only to backends that support it.
+# none | low | medium | high -- sent only to backends that advertise support.
+# A requested budget is omitted (with a warning) when the backend does not.
 reasoning_effort = "none"
+# `reasoning` is accepted as a generic alias for `reasoning_effort`:
+# reasoning = "none"
 # Cap on accumulated response bytes per request (32 MiB). Protects against a
 # misbehaving local server growing memory without bound. 0 disables the cap.
 max_response_bytes = 33554432
@@ -44,6 +57,9 @@ output_format = "markdown"
 stream = true
 lang = ""
 chunk_strategy = "auto"
+# Interactive progress on stderr (TTY only). Always suppressed by --quiet and
+# by a non-TTY stderr; never written to stdout.
+progress = true
 
 [chunking]
 max_tokens_per_chunk = 3000
@@ -51,6 +67,10 @@ overlap_tokens = 200
 reserve_output_tokens = 1000
 # Safety valve for very large documents: refuse to create more chunks than this.
 max_chunks = 256
+# Bounded parallelism for independent map-stage chunks. 1 keeps the original
+# sequential behavior; higher values can help some local servers and hurt
+# others, so measure before raising it. Hard-capped at 8.
+concurrency = 1
 
 [input]
 # 50 MiB / 1,000,000 lines. These limits also bound what may be read from an
@@ -81,6 +101,24 @@ notes_dir = "~/.local/share/summarizer/sessions"
 digest_format = "markdown"
 # Warn (never auto-close or delete) about sessions open longer than this.
 max_age_hours = 24
+
+[cache]
+# Optional local cache/checkpoints for reusable map-stage results.
+#   off        never read or write (default)
+#   read       reuse compatible completed results, write nothing
+#   write      write results/checkpoints, never reuse
+#   readwrite  reuse and write (aliases: on/true)
+# Only derived summaries and hashes are stored -- never document contents and
+# never source paths. Entries self-invalidate when the document, model,
+# profile/prompt, chunk plan, or relevant engine settings change. Directories
+# are 0700 and files 0600; clear with `summarize cache clear`.
+mode = "off"
+dir = "~/.cache/summarizer"
+# Bounds so the cache can never grow without limit (oldest entries pruned).
+max_entries = 500
+max_bytes = 268435456
+# Skip caching a single oversized result.
+max_chunk_bytes = 1048576
 
 [update]
 # The local-only core never checks for updates. `summarize --check-update` is

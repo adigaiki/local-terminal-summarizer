@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from typing import Any, Iterator
 
+from summarizer.engine.backends import BackendSpec
 from summarizer.engine.base import Engine
 from summarizer.engine.capabilities import EngineCapabilities
 from summarizer.engine.client import HttpClient, HttpStatusError, HttpStatusErrorKinds
@@ -40,10 +41,17 @@ class OpenAICompatEngine(Engine):
         self,
         settings: EngineSettings,
         *,
+        spec: BackendSpec | None = None,
         diag: Diagnostics | None = None,
         http: HttpClient | None = None,
     ) -> None:
-        self.backend = settings.backend
+        # Resolve the adapter description from the configured backend when the
+        # factory did not pass one explicitly (direct construction in tests).
+        # The generic engine deliberately does *not* infer a spec: without one
+        # it stays backend-agnostic (unknown reasoning control), so a caller
+        # constructing it directly gets generic behaviour.
+        self.spec = spec
+        self.backend = self.spec.name if self.spec else settings.backend
         self.endpoint = settings.endpoint
         self.model = settings.model
         self.timeout_seconds = float(settings.timeout_seconds)
@@ -52,6 +60,7 @@ class OpenAICompatEngine(Engine):
         self.max_tokens = int(settings.max_tokens)
         self.reasoning_effort = settings.reasoning_effort
         self._diag = diag
+        self._reasoning_warned = False
         self._http = http or HttpClient(
             self.endpoint,
             timeout=self.timeout_seconds,
@@ -63,6 +72,10 @@ class OpenAICompatEngine(Engine):
 
     def _chat_path(self) -> str:
         return _endpoint_v1(self._http.base_path, CHAT_PATH)
+
+    def set_cancel(self, cancel: object | None) -> None:
+        """Let the HTTP layer observe cooperative cancellation."""
+        self._http.cancel = cancel
 
     def _models_path(self) -> str:
         return _endpoint_v1(self._http.base_path, MODELS_PATH)
@@ -98,6 +111,16 @@ class OpenAICompatEngine(Engine):
         }
         if self._reasoning_control_capability() is True:
             payload["reasoning_effort"] = self.reasoning_effort
+        elif self.reasoning_effort not in ("none", "") and not self._reasoning_warned:
+            # Documented fallback: a requested reasoning budget that the
+            # backend does not advertise is omitted rather than risking a
+            # request the server rejects. Reported once, never silently.
+            self._reasoning_warned = True
+            if self._diag:
+                self._diag.verbose_warn(
+                    f"backend {self.backend!r} does not advertise reasoning "
+                    f"control; omitting reasoning_effort={self.reasoning_effort!r}"
+                )
         if temperature is not None:
             payload["temperature"] = temperature
         if json_object:
@@ -107,10 +130,12 @@ class OpenAICompatEngine(Engine):
     def _reasoning_control_capability(self) -> bool | None:
         """Whether this backend supports the portable reasoning-effort field.
 
-        Generic OpenAI-compatible servers are deliberately treated as
-        unknown. Backends which support the field advertise it through this
-        hook and the capability model instead of relying on a model name.
+        Declared statically by the adapter's :class:`BackendSpec`; generic
+        OpenAI-compatible servers are deliberately treated as unknown. No
+        model-family name is ever inspected.
         """
+        if self.spec is not None:
+            return self.spec.reasoning_control
         return None
 
     def _extract_text(self, data: dict[str, Any]) -> str | None:
@@ -121,6 +146,19 @@ class OpenAICompatEngine(Engine):
             if text is not None:
                 return text
         return None
+
+    @staticmethod
+    def _extract_usage(data: dict[str, Any]) -> dict[str, int] | None:
+        """Best-effort token usage from an OpenAI-compatible response."""
+        usage = data.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        result: dict[str, int] = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int):
+                result[key] = value
+        return result or None
 
     def _extract_stream_delta(self, data: dict[str, Any]) -> str | None:
         choices = data.get("choices")
@@ -191,6 +229,7 @@ class OpenAICompatEngine(Engine):
                     f"response had no usable text (keys: {sorted(data.keys())})",
                     hint="the endpoint may not be an OpenAI-compatible chat API",
                 )
+            self.last_usage = self._extract_usage(data)
             return text
 
         return self._run_with_retries("generation", _call)
@@ -243,10 +282,12 @@ class OpenAICompatEngine(Engine):
     def capabilities(self) -> EngineCapabilities:
         if self._capabilities is None:
             caps = EngineCapabilities(
-                streaming=True,
-                structured_json=None,  # never assume: probed at request time
+                backend=self.backend,
+                streaming=bool(self.spec.streaming) if self.spec else True,
+                # Never assume structured output: it is probed at request time.
+                structured_json=None,
                 reasoning_control=self._reasoning_control_capability(),
-                model_listing=True,
+                model_listing=bool(self.spec.model_listing) if self.spec else True,
             )
             if self._config_context_length:
                 caps = caps.with_context_length(self._config_context_length)

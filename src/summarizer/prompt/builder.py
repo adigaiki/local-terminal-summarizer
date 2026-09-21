@@ -26,10 +26,14 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Sequence
 
+from summarizer.errors import SummarizerError
 from summarizer.log import Diagnostics
 from summarizer.profiles import Profile
 
 __all__ = ["PromptBuilder", "BuiltPrompt"]
+
+# Bounded attempts to find a boundary token absent from the content.
+_MAX_BOUNDARY_ATTEMPTS = 8
 
 _PREAMBLE = """\
 You are a document summarization tool controlled by the instructions in this prompt.
@@ -81,6 +85,47 @@ class PromptBuilder:
         """A fresh, cryptographically random boundary token for one request."""
         return f"{kind}-{secrets.token_hex(12)}"
 
+    def safe_boundary(
+        self,
+        kind: str = "document",
+        *untrusted_texts: str,
+        requested: str | None = None,
+    ) -> str:
+        """A boundary token that does not appear in any content it will wrap.
+
+        Randomness alone is not treated as sufficient: a document could
+        deliberately contain boundary-shaped text hoping to close the region
+        early. Before a boundary is used we check the exact token against every
+        piece of content that will be wrapped, and regenerate on a collision.
+        A collision is not an error in the content — we simply pick another
+        token. Regenerating is bounded; if no safe token can be found (only
+        reachable if the random source is subverted) we fail loudly rather than
+        emit a prompt whose boundary can be forged.
+        """
+        haystacks = [text for text in untrusted_texts if text]
+
+        def collides(token: str) -> bool:
+            # The literal token is what would form an opening/closing tag.
+            return any(token in text for text in haystacks)
+
+        if requested:
+            if not collides(requested):
+                return requested
+            if self.diag:
+                self.diag.warn(
+                    "requested prompt boundary appears in the content; "
+                    "generating a fresh boundary instead"
+                )
+        for _ in range(_MAX_BOUNDARY_ATTEMPTS):
+            candidate = self.new_boundary(kind)
+            if not collides(candidate):
+                return candidate
+        raise SummarizerError(
+            "could not generate a prompt boundary absent from the content",
+            hint="this indicates a failing random source; refusing to build an "
+                 "unsafe prompt",
+        )
+
     @staticmethod
     def wrap(text: str, boundary: str) -> str:
         return f"<{boundary}>\n{text}\n</{boundary}>"
@@ -107,7 +152,11 @@ class PromptBuilder:
         if not profile.has_input_slot:
             raise ValueError(f"profile {profile.name!r} has no {{{{input}}}} slot")
 
-        b = boundary or self.new_boundary("document")
+        # The document is untrusted and the context file is user-supplied: a
+        # boundary must not appear in either, or it could be forged.
+        b = self.safe_boundary(
+            "document", document_text, context or "", requested=boundary
+        )
         fmt = _FORMAT_DESCRIPTIONS.get(output_format, output_format)
 
         # Trusted instruction body: profile text with trusted placeholders
@@ -180,7 +229,11 @@ class PromptBuilder:
         if not summaries:
             raise ValueError("build_reduce() requires at least one summary")
 
-        b = boundary or self.new_boundary("interim")
+        # Interim summaries are untrusted intermediate data, exactly like
+        # document content: the boundary must not appear in any of them.
+        b = self.safe_boundary(
+            "interim", *summaries, requested=boundary
+        )
         fmt = _FORMAT_DESCRIPTIONS.get(output_format, output_format)
 
         instructions = profile.text.replace("{{summaries}}", "")

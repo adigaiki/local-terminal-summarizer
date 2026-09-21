@@ -1,0 +1,11 @@
+# Source-distribution contents. The wheel already carries the package and its
+# prompt data (see [tool.setuptools.package-data]); this keeps the docs and the
+# committed example config in the sdist as well.
+include README.md
+include SECURITY.md
+include ROADMAP.md
+include CONTRIBUTING.md
+include LICENSE
+include config.example.toml
+include pyproject.toml
+recursive-include src/summarizer/profiles/prompts *.md

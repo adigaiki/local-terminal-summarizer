@@ -1,0 +1,8 @@
+Release notes for version 3.4
+
+Version 3.4 fixes a crash when exporting empty projects and adds a dark theme.
+The release also changes the default timeout from 30 to 45 seconds. Upgrade
+notes mention that the configuration key `export_path` is now optional.
+
+One breaking change: the old `/v1/export` route was removed. Clients must use
+`/v2/export`. The release was tagged on 2026-02-18 and has no known regressions.

@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "summarizer"
-version = "0.1.0"
+# Single source of truth: the version comes from summarizer.__version__.
+dynamic = ["version"]
 description = "A local-first, Unix-native terminal summarizer for local LLM servers."
 readme = "README.md"
 license = "MIT"
@@ -36,6 +37,9 @@ summarize = "summarizer.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+
+[tool.setuptools.dynamic]
+version = { attr = "summarizer.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

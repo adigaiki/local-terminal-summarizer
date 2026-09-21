@@ -48,8 +48,61 @@ jobs:
           python -m pip install -e '.[test]'
 
       - name: Byte-compile sources and tests
-        run: python -m compileall -q src tests
+        run: python -m compileall -q src tests evaluation scripts
+
+      - name: Repository safety guard
+        # No network: scans the checkout for secrets, local paths, forbidden
+        # files, and wildcard binds. See scripts/check_repo_safety.py.
+        run: python scripts/check_repo_safety.py
+
+      - name: CLI smoke tests
+        # Local-only commands that need no engine: config validation and
+        # shell-completion generation.
+        run: |
+          python -m summarizer config validate
+          python -m summarizer completions bash > /dev/null
+          python -m summarizer completions zsh > /dev/null
+          python -m summarizer completions fish > /dev/null
+
+      - name: Evaluation harness listing
+        # Proves the evaluation framework is wired up without contacting any
+        # engine (CI has no Ollama).
+        run: python -m summarizer evaluate --dry-run
 
       - name: Run test suite
         # pytest configuration lives in pyproject.toml (testpaths = tests).
         run: python -m pytest
+
+  package:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build setuptools wheel
+
+      - name: Build sdist and wheel
+        # A packaging regression (bad metadata, missing package data) fails here.
+        run: python -m build --no-isolation
+
+      - name: Verify the wheel installs and reports its version
+        run: |
+          python -m pip install --force-reinstall --no-deps dist/*.whl
+          python -m summarizer --version
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error

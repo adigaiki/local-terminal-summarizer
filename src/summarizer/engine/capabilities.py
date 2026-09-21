@@ -54,6 +54,43 @@ class EngineCapabilities:
     # Whether the backend accepts a reasoning-effort field on its chat
     # endpoint. Unknown means omit it rather than risk incompatibility.
     reasoning_control: bool | None = None
+    # Canonical backend adapter name this capability set describes.
+    backend: str | None = None
+
+    # -- negotiated capability names ---------------------------------------
+    #
+    # The pipeline asks these questions instead of branching on a backend
+    # name. They are deliberately thin aliases over the fields above so the
+    # vocabulary is explicit and stable for adapters, diagnostics and tests.
+
+    @property
+    def supports_streaming(self) -> bool:
+        return bool(self.streaming)
+
+    @property
+    def supports_structured_output(self) -> bool | None:
+        return self.structured_json
+
+    @property
+    def supports_model_listing(self) -> bool:
+        return bool(self.model_listing)
+
+    @property
+    def supports_reasoning_control(self) -> bool | None:
+        return self.reasoning_control
+
+    def as_dict(self) -> dict[str, object]:
+        """Machine-readable snapshot for diagnostics, reports and dry runs."""
+        return {
+            "backend": self.backend,
+            "streaming": self.streaming,
+            "structured_json": self.structured_json,
+            "model_listing": self.model_listing,
+            "reasoning_control": self.reasoning_control,
+            "context_length": self.context_length,
+            "context_source": self.effective_context_source,
+            "notes": list(self.notes),
+        }
 
     # -- context window -----------------------------------------------------
 
