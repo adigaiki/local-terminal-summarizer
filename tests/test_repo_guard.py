@@ -92,6 +92,88 @@ def test_allowlisted_file_is_exempt(tmp_path, monkeypatch):
     assert guard.scan_file(allowed) == []
 
 
+# --- allowlist: exact fixture vs. other artifacts ---------------------------
+
+
+def _make_log_fixture(tmp_path, allowlist_text: str):
+    allowlist = tmp_path / "leak_allowlist.txt"
+    allowlist.write_text(allowlist_text, encoding="utf-8")
+    fixture = tmp_path / "evaluation" / "fixtures" / "logs.log"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_text("2026-01-01 INFO harmless synthetic line\n", encoding="utf-8")
+    return allowlist, fixture
+
+
+def test_exact_allowlisted_log_fixture_is_accepted(tmp_path, monkeypatch):
+    guard = _load_guard(monkeypatch, tmp_path)
+    allowlist, fixture = _make_log_fixture(
+        tmp_path,
+        "evaluation/fixtures/logs.log | * | public synthetic evaluation fixture\n",
+    )
+    monkeypatch.setattr(guard, "ALLOWLIST_PATH", allowlist)
+
+    assert guard.scan_file(fixture) == []
+
+
+def test_other_log_files_are_still_flagged(tmp_path, monkeypatch):
+    guard = _load_guard(monkeypatch, tmp_path)
+    allowlist, _ = _make_log_fixture(
+        tmp_path,
+        "evaluation/fixtures/logs.log | * | public synthetic evaluation fixture\n",
+    )
+    monkeypatch.setattr(guard, "ALLOWLIST_PATH", allowlist)
+
+    other = tmp_path / "scratch.log"
+    other.write_text("ordinary log line\n", encoding="utf-8")
+    rules = {finding.rule for finding in guard.scan_file(other)}
+    assert "temp-artifact" in rules
+
+
+def test_path_allowlist_does_not_hide_a_content_secret(tmp_path, monkeypatch):
+    guard = _load_guard(monkeypatch, tmp_path)
+    allowlist, fixture = _make_log_fixture(
+        tmp_path,
+        "evaluation/fixtures/logs.log | temp-artifact | public synthetic fixture\n",
+    )
+    monkeypatch.setattr(guard, "ALLOWLIST_PATH", allowlist)
+    fixture.write_text('api_key = "0123456789abcdef0123456789abcdef"\n', encoding="utf-8")
+
+    rules = {finding.rule for finding in guard.scan_file(fixture)}
+    assert "temp-artifact" not in rules          # the path rule is allowed
+    assert "assigned-secret" in rules            # the content rule is not
+
+
+def test_malformed_allowlist_entry_is_reported_and_does_not_disable_checks(tmp_path, monkeypatch):
+    guard = _load_guard(monkeypatch, tmp_path)
+    allowlist, fixture = _make_log_fixture(
+        tmp_path,
+        "evaluation/fixtures/logs.log |\n",  # missing the rule field
+    )
+    monkeypatch.setattr(guard, "ALLOWLIST_PATH", allowlist)
+
+    entries, problems = guard.load_allowlist_report()
+    assert entries == []
+    assert problems and "malformed" in problems[0]
+
+    # The malformed entry must not suppress the finding.
+    rules = {finding.rule for finding in guard.scan_file(fixture)}
+    assert "temp-artifact" in rules
+
+
+def test_main_fails_loudly_on_a_malformed_allowlist(tmp_path, monkeypatch, capsys):
+    guard = _load_guard(monkeypatch, tmp_path)
+    allowlist, _ = _make_log_fixture(
+        tmp_path,
+        "evaluation/fixtures/logs.log |\n",
+    )
+    monkeypatch.setattr(guard, "ALLOWLIST_PATH", allowlist)
+
+    code = guard.main([])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "allowlist problems" in out
+
+
 # --- public endpoint hygiene ------------------------------------------------
 
 

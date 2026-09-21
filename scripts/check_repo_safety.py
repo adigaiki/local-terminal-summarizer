@@ -23,7 +23,11 @@ Allowlist entries live in ``scripts/leak_allowlist.txt`` and are of the form::
 
     path-fragment | rule | why this is safe
 
-``rule`` may be ``*``. An empty or comment (``#``) line is ignored.
+``rule`` may be ``*``. An empty or comment (``#``) line is ignored. A
+malformed entry allows nothing and is reported (the guard fails loudly rather
+than silently ignoring it). The allowlist applies to both path-based findings
+(forbidden files, temporary artifacts) and content rules, but allowing a path
+rule never suppresses a content rule.
 """
 
 from __future__ import annotations
@@ -137,19 +141,38 @@ def _is_skipped_path(path: Path) -> bool:
     return path.suffix.lower() in SKIP_SUFFIXES
 
 
-def _load_allowlist() -> list[tuple[str, str]]:
+def _parse_allowlist(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Parse allowlist text into ``(entries, problems)``.
+
+    A malformed line is dropped (it must never allow anything) but recorded as
+    a problem so it is surfaced rather than silently ignored.
+    """
     entries: list[tuple[str, str]] = []
-    if not ALLOWLIST_PATH.is_file():
-        return entries
-    for raw in ALLOWLIST_PATH.read_text(encoding="utf-8").splitlines():
+    problems: list[str] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         fields = [field.strip() for field in line.split("|")]
-        if len(fields) < 2:
+        if len(fields) < 2 or not fields[0] or not fields[1]:
+            problems.append(
+                f"line {lineno}: malformed allowlist entry {raw!r} "
+                "(expected 'path-fragment | rule | reason')"
+            )
             continue
         entries.append((fields[0], fields[1]))
-    return entries
+    return entries, problems
+
+
+def load_allowlist_report() -> tuple[list[tuple[str, str]], list[str]]:
+    """Return ``(valid entries, malformed-line problems)`` for the allowlist."""
+    if not ALLOWLIST_PATH.is_file():
+        return [], []
+    return _parse_allowlist(ALLOWLIST_PATH.read_text(encoding="utf-8"))
+
+
+def _load_allowlist() -> list[tuple[str, str]]:
+    return load_allowlist_report()[0]
 
 
 def _is_allowed(allowlist: list[tuple[str, str]], rel: str, rule: str) -> bool:
@@ -203,30 +226,35 @@ def _preview(text: str) -> str:
 
 def scan_file(path: Path) -> list[Finding]:
     rel = str(path.relative_to(REPO_ROOT))
-    name_findings: list[Finding] = []
+    allowlist = _load_allowlist()
+
+    # Name-based findings (forbidden files, temporary artifacts) are filtered
+    # through the allowlist too. This is the part that lets an exact entry
+    # such as ``evaluation/fixtures/logs.log | * | ...`` suppress *only* that
+    # file while ``*.log`` stays flagged everywhere else.
+    findings: list[Finding] = []
     lower = path.name.lower()
     if lower in FORBIDDEN_TRACKED_NAMES:
-        name_findings.append(Finding(rel, 0, "forbidden-file", path.name))
+        findings.append(Finding(rel, 0, "forbidden-file", path.name))
     if lower.endswith(FORBIDDEN_TRACKED_SUFFIXES):
-        name_findings.append(Finding(rel, 0, "forbidden-file", path.name))
+        findings.append(Finding(rel, 0, "forbidden-file", path.name))
     if lower.endswith(ARTIFACT_SUFFIXES):
-        name_findings.append(Finding(rel, 0, "temp-artifact", path.name))
-    if name_findings:
-        return name_findings
+        findings.append(Finding(rel, 0, "temp-artifact", path.name))
+    findings = [f for f in findings if not _is_allowed(allowlist, rel, f.rule)]
 
+    # Always continue to content scanning: allowlisting a *path* rule must not
+    # hide an actual credential inside the file.
     try:
         raw = path.read_bytes()
     except OSError:
-        return []
+        return findings
     if b"\x00" in raw[:8192]:
-        return []
+        return findings
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return []
+        return findings
 
-    findings: list[Finding] = []
-    allowlist = _load_allowlist()
     for lineno, line in enumerate(text.splitlines(), start=1):
         for rule in RULES:
             if rule.pattern.search(line):
@@ -248,18 +276,26 @@ def scan(repo_root: Path | None = None) -> list[Finding]:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    _, problems = load_allowlist_report()
     findings = scan()
-    if not findings:
+    if problems:
+        print("repository safety check: allowlist problems")
+        print("")
+        for problem in problems:
+            print(f"  {ALLOWLIST_PATH.relative_to(REPO_ROOT)}: {problem}")
+        print("")
+    if not findings and not problems:
         print(f"repository safety check: clean ({len(tracked_files())} files scanned)")
         return 0
-    print("repository safety check: findings")
-    print("")
-    for finding in findings:
-        location = f"{finding.path}:{finding.line}" if finding.line else finding.path
-        print(f"  {location}: {finding.rule}: {finding.preview}")
-    print("")
-    print("Resolve each finding, or add an entry with a reason to")
-    print(f"  {ALLOWLIST_PATH.relative_to(REPO_ROOT)}")
+    if findings:
+        print("repository safety check: findings")
+        print("")
+        for finding in findings:
+            location = f"{finding.path}:{finding.line}" if finding.line else finding.path
+            print(f"  {location}: {finding.rule}: {finding.preview}")
+        print("")
+        print("Resolve each finding, or add an entry with a reason to")
+        print(f"  {ALLOWLIST_PATH.relative_to(REPO_ROOT)}")
     return 1
 
 

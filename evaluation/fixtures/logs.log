@@ -1,0 +1,10 @@
+2026-03-02T02:14:01Z INFO  boot: scheduler started, 4 workers
+2026-03-02T02:14:02Z INFO  disk: mounted /var/lib/data (ext4)
+2026-03-02T02:15:44Z WARN  disk: /var/lib/data at 87% capacity
+2026-03-02T02:15:44Z WARN  disk: /var/lib/data at 91% capacity
+2026-03-02T02:16:03Z ERROR disk: write failed on /var/lib/data/segment-0042: EIO
+2026-03-02T02:16:03Z ERROR ingest: dropping batch 7811 after 3 retries
+2026-03-02T02:16:04Z ERROR ingest: retry queue length 1
+2026-03-02T02:16:05Z INFO  ingest: retry queue drained after compaction
+2026-03-02T02:16:06Z INFO  disk: /var/lib/data at 63% capacity after compaction
+2026-03-02T02:17:00Z INFO  health: all workers reporting ready

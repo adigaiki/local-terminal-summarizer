@@ -13,3 +13,5 @@ scripts/check_repo_safety.py | * | the leak guard's own pattern definitions
 # The guard's own tests deliberately contain example secrets/paths to prove
 # they are detected. The examples are fake and never leave the test process.
 tests/test_repo_guard.py | * | fake leak samples used to test the guard
+
+evaluation/fixtures/logs.log | * | public synthetic evaluation fixture referenced by evaluation/cases/core.toml
