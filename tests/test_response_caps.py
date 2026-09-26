@@ -23,23 +23,33 @@ class _Handler(BaseHTTPRequestHandler):
     mode = "body"  # class attribute; subclasses override
 
     def do_POST(self):  # noqa: N802 - http.server API
+        # Drain the request body before responding. An unread body left in the
+        # receive queue makes close() send RST, which can race a client still
+        # reading a large response (observed on GitHub's Python 3.11 runner).
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
         if self.mode == "sse":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
             # One valid event first, then one deliberately unterminated event:
             # no blank line ever arrives, so an unbounded client would buffer
-            # forever until the cap fires.
+            # forever until the cap fires. Close-delimited on purpose.
             self.wfile.write(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n')
             for _ in range(64):
                 self.wfile.write(b"data: x" + b"y" * 65536 + b"\n")  # no blank line
                 self.wfile.flush()
         else:
+            body_size = 512 * 65536  # ~32 MiB
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            # Declare the length so the client stops at the last byte instead
+            # of waiting for a close-delimited EOF.
+            self.send_header("Content-Length", str(body_size))
             self.end_headers()
             for _ in range(512):
-                self.wfile.write(b"z" * 65536)  # ~32 MiB total, no framing games
+                self.wfile.write(b"z" * 65536)  # no framing games
                 self.wfile.flush()
 
     def log_message(self, *_):
