@@ -18,7 +18,7 @@ loopback (`http://localhost:11434` by default) and nowhere else.
   OCR are optional extras that add their own.
 - No cloud, no telemetry, no model download, no self-update.
 
-## Why not just `ollama run model < file`?
+## Why not just `ollama run`?
 
 `ollama run` prints whatever the model says, with no structure around it.
 `summarize` wraps the same local model with the things a summarizer needs:
@@ -30,6 +30,7 @@ missing. It is one small tool, not a chat client.
 
 ## Table of contents
 
+- [Why not just `ollama run`?](#why-not-just-ollama-run)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Quick start (Ollama)](#quick-start-ollama)
@@ -39,8 +40,11 @@ missing. It is one small tool, not a chat client.
 - [Configuration](#configuration)
 - [Profiles](#profiles)
 - [Safety: trusted vs. untrusted input](#safety-trusted-vs-untrusted-input)
+- [Verifying a summary (`--verify`)](#verifying-a-summary---verify)
 - [Output and the JSON schema](#output-and-the-json-schema)
+- [Local state: cache and sessions](#local-state-cache-and-sessions)
 - [Commands](#commands)
+- [Evaluation is mechanical](#evaluation-is-mechanical)
 - [Speed and system load](#speed-and-system-load)
 - [Troubleshooting](#troubleshooting)
 - [Documentation](#documentation)
@@ -57,9 +61,10 @@ missing. It is one small tool, not a chat client.
   fits in GPU memory it is fast (tens of tokens/second); if it spills to CPU
   it still works but can drop to ~1 token/second. `ollama ps` shows the
   CPU/GPU split and the serving context window.
-- **Platforms:** developed and tested on **Linux** (the only OS classifier).
-  The code uses only POSIX APIs (`flock`, signals), so **macOS and WSL are
-  expected to work but are not covered by CI**. Native Windows is unsupported.
+- **Platforms:** developed and tested on **Linux**, the only platform declared
+  in the packaging metadata. The code uses only POSIX APIs (`flock`, signals),
+  so **macOS and WSL are expected to work but are not covered by CI**. Native
+  Windows is unsupported.
 
 ## Install
 
@@ -164,6 +169,7 @@ of these it can reach.
 summarize article.md
 git diff | summarize --profile code
 summarize report.pdf --profile academic
+summarize scan.pdf --ocr                      # OCR a scanned PDF (optional extra)
 summarize notes.txt --format json | jq
 summarize notes.txt -o summary.md
 summarize incident.txt --context glossary.md   # glossary.md is trusted, incident.txt stays untrusted
@@ -267,31 +273,88 @@ is [docs/design.md](docs/design.md); the local-state and privacy summary is
 the private vulnerability-reporting policy — that is why there are two
 security documents.
 
+## Verifying a summary (`--verify`)
+
+`--verify` checks the summary against the source text and reports numbers or
+`ACRONYM (expansion)` phrases that do not appear there — a cheap first pass at
+hallucination detection. It is **grep, not a judge model**, so a flag is for
+review, not a verdict.
+
+The report goes to **stderr** after the summary (stdout stays clean and
+composable), and it is **advisory**: it does not change the exit status and does
+not edit the summary. With `--format json` it becomes a top-level
+`verification` object.
+
+```console
+$ summarize paper.pdf --verify
+<summary on stdout>
+verification: 2 unverified claim(s) (34 numbers, 1 expansions checked)
+  number: 89.42(2)
+  expansion: M.E.W. (Molecular Ensemble with Water)
+```
+
+It is deliberately narrow: it does not catch a real number on the wrong label
+(a table column swap), the `Phrase (ACRONYM)` order, or non-numeric
+fabrication. Worked examples and the full list of limits are in
+[docs/verify.md](docs/verify.md).
+
 ## Output and the JSON schema
 
 Default output is Markdown on stdout. `--format json` emits a stable envelope
 (`document`, `profile`, `engine`, `strategy`, `chunks`, `summary`,
-`chunk_provenance`, `duration_seconds`) with schema and an example in
-[docs/readers.md](docs/readers.md#provenance-and-the-json-schema). Provenance
-never leaks into plain/Markdown output and never enters trusted prompt
-instructions. `--dry-run` reports reader metadata and the prompt identity
-without contacting a backend.
+`chunk_provenance`, `duration_seconds`) with the schema and an example in
+[docs/readers.md](docs/readers.md#provenance-and-the-json-schema); `--verify`
+adds a top-level `verification` object. Provenance never leaks into
+plain/Markdown output and never enters trusted prompt instructions.
+`--dry-run` reports reader metadata and the prompt identity without contacting
+a backend.
+
+## Local state: cache and sessions
+
+`summarize` writes nothing by default. Two optional, plain-file local stores
+exist — both are covered in [docs/performance.md](docs/performance.md),
+[docs/sessions.md](docs/sessions.md), and [docs/security.md](docs/security.md).
+
+- **Cache** (`summarize cache status|path|clear`) — **off by default**. When
+  enabled (`[cache] mode = "readwrite"`), it stores *derived summaries* only
+  (model output), keyed by a content hash of the document plus the model,
+  profile/prompt identity, and chunking settings, under `~/.cache/summarizer/`.
+  It never stores document text or source paths, and an unchanged re-run skips
+  the model. Off means no directory is created.
+- **Sessions** (`summarize session start|end|status`) — named local run records.
+  Group several runs under one label to review, later, which files you
+  summarized, with which profile, and how long each took. Entries are pointers
+  only (never summary text), and a run is recorded only when a session is
+  explicitly selected.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `summarize FILE` / `-` | summarize a file or stdin |
+| `summarize FILE --verify` | flag summary numbers/expansions absent from the source (advisory; see above) |
 | `summarize doctor` | installation, configuration, backend, model, and cache diagnostics |
 | `summarize models` | models the configured local backend reports |
 | `summarize profiles` | installed profiles and their prompt identity |
 | `summarize config show\|path\|validate` | resolved configuration and locations |
-| `summarize cache status\|path\|clear` | inspect and clear the optional cache |
+| `summarize cache status\|path\|clear` | inspect and clear the optional cache (off by default) |
 | `summarize evaluate` | run the local model/backend evaluation corpus |
-| `summarize session start\|end\|status` | named local run sessions |
+| `summarize session start\|end\|status` | group runs under a named local record |
 | `summarize completions bash\|zsh\|fish` | shell completion script |
 
 Options and exit status: [docs/cli.md](docs/cli.md).
+
+## Evaluation is mechanical
+
+`summarize evaluate` runs a deterministic corpus against your local
+model/backend and applies **mechanical** checks — valid format, valid JSON, a
+retained sentinel, no echoed injection marker, expected strategy, bounded size —
+plus latency and estimated output tokens. These are **not objective quality
+scores**, and no external judge model is involved: a summary can pass every
+check and still be wrong. Whether the summaries are actually good is a separate
+question, addressed (partially, and with caveats) in
+[docs/quality.md](docs/quality.md); the harness itself is
+[docs/evaluation.md](docs/evaluation.md).
 
 ## Speed and system load
 
@@ -308,6 +371,10 @@ of the cost; keeping a document in a single direct call is usually faster and
 more coherent than map-reduce. If a run is slow, check `ollama ps` for the
 CPU/GPU split and the serving context window, and prefer a smaller model that
 stays on the GPU. `--stats` reports timing and token estimates on stderr.
+
+The CLI is GPU-agnostic: acceleration is whatever your model server provides.
+The numbers above are CUDA; Metal (macOS) and ROCm are expected to work through
+Ollama but are untested here.
 
 ## Troubleshooting
 
@@ -340,6 +407,7 @@ The README is the orientation; the detail lives in [docs/](docs/index.md).
 | [Backends](docs/backends.md) | adapters and capability negotiation |
 | [Performance and local state](docs/performance.md) | progress, cancellation, concurrency, cache, stats |
 | [Readers](docs/readers.md) | inputs, PDF/OCR, provenance, JSON schema, limits |
+| [Claim verification](docs/verify.md) | `--verify`: what it checks, and what it misses |
 | [Sessions](docs/sessions.md) | named local run records |
 | [Design and safety](docs/design.md) | the trust boundary and aggregation |
 | [Security and privacy](docs/security.md) | local-only guarantees, local state |
