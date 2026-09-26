@@ -110,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--endpoint", metavar="URL", default=None,
                         help="local LLM server endpoint")
     parser.add_argument("--backend", metavar="NAME", default=None,
-                        help="engine backend adapter: ollama, openai-compatible "
+                        help="backend adapter: ollama, openai-compatible "
                              "(alias openai), llama.cpp, or lmstudio")
     parser.add_argument("--no-stream", action="store_true",
                         help="do not stream output tokens live")
@@ -130,9 +130,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", dest="timeout_seconds", type=int, metavar="SECONDS",
                         default=None, help="per-request timeout in seconds")
     parser.add_argument("--retries", type=int, metavar="N", default=None,
-                        help="retries for transient engine failures")
+                        help="retries for transient backend failures")
     parser.add_argument("--max-tokens", type=int, metavar="N", default=None,
-                        help="maximum generated tokens per engine request")
+                        help="maximum generated tokens per backend request")
     parser.add_argument(
         "--reasoning-effort", choices=("none", "low", "medium", "high"),
         default=None, help="reasoning budget for backends that support it (default: none)",

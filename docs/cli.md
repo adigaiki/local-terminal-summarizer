@@ -28,7 +28,7 @@ summarize models --format json
 summarize config show         # every resolved value and the layer that set it
 ```
 
-`doctor` shows where each engine setting came from, whether the configured
+`doctor` shows where each backend setting came from, whether the configured
 model exists, which models are installed (when the backend can enumerate them),
 the context window and its provenance, and the negotiated capabilities. It
 distinguishes healthy (`✓`), optional/unavailable (`!`), and required failures
@@ -74,7 +74,7 @@ framework is required.
 | ---: | --- |
 | 0 | success |
 | 1 | input or usage error; `evaluate` with failing cases |
-| 2 | local engine error |
+| 2 | local backend error |
 | 3 | configuration error |
 | 4 | explicit update-check error |
 | 130 | interrupted with Ctrl-C |

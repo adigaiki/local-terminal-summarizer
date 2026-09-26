@@ -154,7 +154,7 @@ class DryRunReport:
             "",
             f"Profile:        {self.profile.name} ({self.profile.source})",
             f"  identity:     {self.prompt_identity or 'n/a'}",
-            f"Engine:         {self.engine.backend}",
+            f"Backend:        {self.engine.backend}",
             f"Model:          {self.engine.model}",
             f"  source:       {self._origin('engine.model')}",
             f"Endpoint:       {redact_url(self.engine.endpoint)}",

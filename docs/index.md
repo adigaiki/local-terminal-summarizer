@@ -15,7 +15,7 @@ here.
 | [Design and safety](design.md) | the trust boundary, boundary-collision handling, map-reduce intermediates, chunking |
 | [Security and privacy](security.md) | local-only guarantees, local state, the repository safety guard |
 | [Evaluation](evaluation.md) | the local model/backend evaluation harness |
-| [Summary quality](quality.md) | the honest state: quality is not yet measured, and the plan |
+| [Summary quality](quality.md) | the first manual claims benchmark, and its caveats |
 
 Project policies: [SECURITY.md](../SECURITY.md) (threat model) and
 [ROADMAP.md](../ROADMAP.md) (design notes and deferred work).

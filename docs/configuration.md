@@ -21,7 +21,7 @@ SUMMARIZER_PROJECT_CONFIG=./team.toml summarize a.md    # read an explicit file
 
 Unset, no project file is read. When it is read, it keeps its place in the
 precedence chain above. `--dry-run` and `summarize doctor` show which layer
-supplied each engine setting.
+supplied each backend setting.
 
 ## Example `summarizer.toml`
 

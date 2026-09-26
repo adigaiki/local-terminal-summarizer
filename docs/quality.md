@@ -1,16 +1,21 @@
 # Summary quality: the honest current state
 
-The project has never measured whether its summaries are good.
+The project has no objective quality score. It has one small, **manual**
+benchmark, recorded below: a handful of documents scored for coverage against
+human-written reference claims, run on two local models. That is a smoke
+signal, not a verdict, and no number here should be read as an objective
+quality score.
 
 The evaluation harness ([evaluation.md](evaluation.md)) checks that output is
 well-formed and structurally safe: valid format, valid JSON, a retained
 sentinel, no echoed injection marker, expected strategy, bounded size. A summary
 can pass all of those and still omit the point, invert a claim, or invent a
-fact. There is no reference-based quality benchmark in this repository, and no
-number in the README or docs should be read as one.
+fact. The claims pass below is the first attempt to look past those mechanical
+checks; it is deliberately small and its caveats are stated throughout.
 
-This page records the gap and the plan to close it. It is deliberately a plan,
-not more infrastructure: the ordering matters more than the mechanism.
+This page records the gap, the method, and the first observations. The
+ordering matters more than the mechanism: run it once by hand, read the
+failures, then automate only what proved worth automating.
 
 ## Why this is the next real milestone
 

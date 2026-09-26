@@ -1,7 +1,7 @@
 # Readers, provenance, and limits
 
 Every reader produces the same `Document` object — content, source, MIME type,
-encoding, size, and reader metadata — so the engine and chunker do not know
+encoding, size, and reader metadata — so the backend and chunker do not know
 which reader ran.
 
 | Input | Reader | Notes |
@@ -100,4 +100,4 @@ Oversized input is budgeted against the model's *discovered* context window
 paragraph/sentence/word boundaries with overlap and summarized via map-reduce.
 Use `--chunk-strategy tokens|chars` to pick the sizing unit, and `--strict` to
 refuse chunking entirely instead of degrading to map-reduce. `--dry-run` reads
-and plans the request without probing or contacting an engine.
+and plans the request without probing or contacting a backend.

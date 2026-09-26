@@ -4,7 +4,7 @@ Exit codes (stable, documented contract):
 
     0  success
     1  input error
-    2  engine error
+    2  backend error
     3  config error
     4  update error
     130 interrupted by SIGINT (conventional)

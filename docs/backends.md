@@ -2,7 +2,7 @@
 
 Backends are adapters behind one generic interface — `generate()`, `stream()`,
 `health()`, `list_models()`, and `capabilities()`. The pipeline does not branch
-on a backend name; it asks the engine what it supports and negotiates:
+on a backend name; it asks the backend what it supports and negotiates:
 
 | Capability | Meaning |
 | --- | --- |
@@ -30,7 +30,7 @@ cannot express gets one small adapter class. There are no cloud providers.
 
 ## How negotiation shows up
 
-- Streaming is used only when you asked for it and the engine reports support;
+- Streaming is used only when you asked for it and the backend reports support;
   otherwise the run falls back to a single request.
 - `--format json` requests a structured object when the backend advertises it,
   and validates the reply strictly regardless (see [readers.md](readers.md)).

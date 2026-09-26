@@ -5,9 +5,10 @@ practical summary.
 
 ## Local-only core
 
-Normal summarization makes no network requests. There is no telemetry,
-analytics, cloud API, remote logging, or model download. The engine endpoint
-defaults to `http://localhost:11434`; point it at whatever local server you run.
+Normal summarization sends nothing off your machine: it talks only to the
+local backend over loopback. There is no telemetry, analytics, cloud API,
+remote logging, or model download. The backend endpoint defaults to
+`http://localhost:11434`; point it at whatever local server you run.
 
 `--check-update` is the only network operation, and only when you configure a
 URL yourself. `summarize models`, `doctor`, and `evaluate` contact only the

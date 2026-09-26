@@ -225,15 +225,15 @@ def diagnose(
         reachable = False
     checks.append(
         _check(
-            "Engine reachable",
+            "Backend reachable",
             reachable,
             detail=[f"endpoint: {redact_url(engine.endpoint)}"],
         )
     )
     if not checks[-1].ok:
         checks[-1].hint = "start your local model server, or fix `[engine] endpoint` in config"
-        checks.append(_check("Model available", False, message="skipped: engine unreachable"))
-        checks.append(_check("Capabilities", False, message="skipped: engine unreachable"))
+        checks.append(_check("Model available", False, message="skipped: backend unreachable"))
+        checks.append(_check("Capabilities", False, message="skipped: backend unreachable"))
         checks.extend(_reader_checks())
         return DoctorReport(
             checks=checks, engine=engine, model=engine.model,
@@ -391,7 +391,7 @@ def render_doctor(report: DoctorReport) -> str:
             lines.append(f"    hint: {check.hint}")
     lines += [
         "",
-        "Engine:",
+        "Backend:",
         f"  backend:  {report.backend}",
         f"  model:    {report.model}",
         f"  endpoint: {redact_url(report.endpoint)}",

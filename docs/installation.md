@@ -34,7 +34,7 @@ pip install 'summarizer[pdf]'   # PDF text extraction (pypdf + fonttools, both B
 pip install 'summarizer[ocr]'   # OCR: adds pytesseract + pdf2image
 ```
 
-The base install has no runtime dependencies. OCR additionally needs the
+The base install has no runtime dependencies beyond Python itself. OCR additionally needs the
 system `tesseract` and Poppler (`pdftoppm`, `pdfinfo`) binaries; missing
 components produce an actionable error, and nothing is installed
 automatically. `summarize doctor` reports both capabilities, marking an
