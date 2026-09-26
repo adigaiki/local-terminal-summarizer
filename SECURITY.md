@@ -4,7 +4,13 @@
 
 Document content is untrusted. For every request it is wrapped in a fresh, cryptographically random boundary (`secrets.token_hex(12)`), separate from trusted instructions; map-reduce interim summaries get the same treatment with per-round boundaries, so instruction-like text in a document or an interim summary is treated as data, not as commands.
 
-Boundary collisions are handled explicitly, not left to probability. Before wrapping content the tool checks whether the exact boundary token occurs in every piece of content it will enclose (the document and any trusted context file) and regenerates the token on a collision, bounded by a small retry limit; if no safe token can be produced it refuses to build the prompt rather than emit a forgeable one. Boundary-shaped text in the document is therefore inert, and the document on disk is never modified.
+Boundary collisions are handled explicitly, not left to probability. Before wrapping content the tool checks whether the exact boundary token occurs in every piece of content it will enclose (the document and any trusted context file) and regenerates the token on a collision, bounded by a small retry limit; if no safe token can be produced it refuses to build the prompt rather than emit a forgeable one. Boundary-shaped text in the document therefore cannot be used to forge the delimiter, and the document on disk is never modified.
+
+### What the boundary does and does not buy
+
+Collision checking is **defence-in-depth, not prevention**. It removes the ability to forge the delimiter; it does not stop persuasive text *inside* the region from influencing the model. A model may still follow instructions embedded in a document, and the prompt contract is probabilistic.
+
+The blast radius is bounded by what the tool does with model output: it prints it (or emits it as JSON) and nothing else. There is no tool execution, no network request, no file write, and no shell driven by model output. A successful injection therefore produces a wrong or misleading summary — a real problem for trust, but not code execution. The one way to make it worse is to feed `--format json` into something automated without validating it; if you do that, treat the summary text as untrusted input at that boundary too.
 
 ### Map/reduce is a two-stage boundary, not a trust promotion
 
@@ -36,7 +42,7 @@ Residual risk, stated honestly: these limits bound the *extracted text* a PDF pr
 
 ## Sessions
 
-Sessions are opt-in and local. A run is recorded only when a session is explicitly selected — `--session NAME`, `$SUMMARIZER_SESSION`, or the documented same-directory rule (see README "Which session does a run record into?") — and nothing is recorded otherwise, so unrelated terminals cannot inherit a session by accident. There is no daemon, no filesystem watcher, and no process tracking; no shell hook is ever installed automatically.
+Sessions are opt-in and local. A run is recorded only when a session is explicitly selected — `--session NAME`, `$SUMMARIZER_SESSION`, or the documented same-directory rule (see [docs/sessions.md](docs/sessions.md)) — and nothing is recorded otherwise, so unrelated terminals cannot inherit a session by accident. There is no daemon, no filesystem watcher, and no process tracking; no shell hook is ever installed automatically.
 
 Session files live under the sessions root (`[session] notes_dir`) as directories per session with restrictive permissions (0700 directories, 0600 files) and contain pointers only: source path, profile, timestamps, document type, page/chunk counts, strategy, duration, and a one-sentence extract capped at 200 characters. Full summaries, prompts, document text, environment variables, and credentials are never written to session files or logs.
 

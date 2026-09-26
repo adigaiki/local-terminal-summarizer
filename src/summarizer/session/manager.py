@@ -1,6 +1,6 @@
 """Named, explicitly-selected sessions backed by ordinary local files.
 
-Design (v0.4; the exact semantics are documented in README):
+Design (v0.4; the exact semantics are documented in docs/sessions.md):
 
   * A session is a named directory of plain files under the sessions root
     (``~/.local/share/summarizer/sessions/<name>/``). No database, no daemon,

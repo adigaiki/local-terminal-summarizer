@@ -119,6 +119,9 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         "max_pdf_pages": 2000,
         "max_extracted_bytes": 33554432,
         "ocr_timeout_seconds": 120,
+        # Rewrite simple extracted tables as explicit label/value rows before
+        # they reach the model (see summarizer.document.tables).
+        "structure_tables": True,
     },
     "session": {
         # Master switch. Recording still requires an explicitly selected
@@ -222,10 +225,12 @@ class InputSettings:
     max_bytes: int = 52428800
     max_lines: int = 1000000
     encoding: str = "utf-8"
-    # PDF/OCR resource limits (see README "Resource limits").
+    # PDF/OCR resource limits (see docs/readers.md).
     max_pdf_pages: int = 2000
     max_extracted_bytes: int = 33554432
     ocr_timeout_seconds: int = 120
+    # Rewrite simple extracted tables as explicit label/value rows.
+    structure_tables: bool = True
 
 
 @dataclass(frozen=True)
@@ -588,6 +593,7 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         max_pdf_pages=_int(merged["input"], "max_pdf_pages", ctx, minimum=1, maximum=10000),
         max_extracted_bytes=_int(merged["input"], "max_extracted_bytes", ctx, minimum=1, maximum=536870912),
         ocr_timeout_seconds=_int(merged["input"], "ocr_timeout_seconds", ctx, minimum=1, maximum=600),
+        structure_tables=_bool(merged["input"], "structure_tables", ctx),
     )
     session = SessionSettings(
         enabled=_bool(merged["session"], "enabled", ctx),

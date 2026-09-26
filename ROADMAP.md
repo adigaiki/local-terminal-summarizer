@@ -51,6 +51,23 @@
 - Broken pipes (`summarize file | head`) exit 141 with no traceback and no shutdown-time flush noise.
 - Packaging: a single version source (`summarizer.__version__`, read dynamically by setuptools), console script, zero runtime dependencies, `MANIFEST.in`, and a tag-triggered release workflow that builds sdist+wheel, writes `SHA256SUMS`, and publishes a GitHub release. No self-update; the running tool downloads nothing.
 
-## Deferred (deliberately out of scope)
+## Next: ship, then measure quality
+
+The infrastructure is ahead of the evidence. The priority order is now:
+
+1. **Ship v0.6**: publish to PyPI, install with `pipx`, get a handful of real
+   users. Until people use it, more features are guesses.
+2. **Build one honest quality benchmark**: a handful of documents with
+   human-written reference claims, scored for factual coverage and omission,
+   run against two local models. Design and caveats:
+   [docs/quality.md](docs/quality.md). This is the only planned work that
+   addresses whether the summaries are actually good.
+3. Let those results, not a feature list, decide what comes next.
+
+More infrastructure — refine-based aggregation, hierarchical reduction, new
+profiles — is not the next step. The core function has never been evaluated,
+and that gap is worth more than another milestone.
+
+## Deferred
 
 GUI, URL fetching, cloud models, agents, tool execution, embeddings/vector databases, self-update, background services, automatic model installation, multi-model ensemble/routing, and refine-based aggregation. These remain out of scope until a concrete need appears.

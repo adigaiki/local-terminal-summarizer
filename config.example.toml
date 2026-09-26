@@ -85,6 +85,10 @@ max_pdf_pages = 2000
 max_extracted_bytes = 33554432
 # Per-page timeout for --ocr rendering/recognition (local Tesseract/Poppler).
 ocr_timeout_seconds = 120
+# Rewrite simple extracted PDF tables as explicit label/value rows before they
+# reach the model, so a small model cannot shift columns. Non-table text is
+# untouched. Disable to see the raw extraction.
+structure_tables = true
 
 [session]
 # Master switch for session recording. A run is still only recorded when a

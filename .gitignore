@@ -97,6 +97,10 @@ scratch/
 /.summarizer-cache/
 /summarizer-cache/
 
+# Benchmark model outputs are derived from the user's private documents and
+# must not be committed.
+/benchmark/results/
+
 # ---------------------------------------------------------------------------
 # Editor / IDE state
 # ---------------------------------------------------------------------------

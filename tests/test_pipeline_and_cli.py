@@ -307,7 +307,7 @@ def test_cli_usage_errors_use_the_documented_input_exit_code(argv, capsys):
     """Usage errors exit 1; exit 2 is reserved for local engine errors.
 
     argparse's default is 2, which would collide with the documented
-    "local engine error" status in README "Exit status".
+    "local engine error" status (see docs/cli.md "Exit status").
     """
     with pytest.raises(SystemExit) as excinfo:
         main(argv)

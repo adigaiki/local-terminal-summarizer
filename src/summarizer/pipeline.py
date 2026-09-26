@@ -42,6 +42,7 @@ from summarizer.output import (
 from summarizer.profiles import REDUCE_PROFILE, Profile, load_profile
 from summarizer.prompt import PromptBuilder, profile_identity, prompt_identity
 from summarizer.progress import ProgressReporter
+from summarizer.verify import verify_summary
 
 __all__ = ["Pipeline", "PipelineOptions", "PipelineResult", "DryRunReport"]
 
@@ -65,6 +66,9 @@ class PipelineOptions:
     # Include an execution-stats object in the JSON envelope (stdout); without
     # this, stats are only reported by the CLI on stderr when --stats is set.
     stats: bool = False
+    # Mechanically verify summary claims against the source and flag any that
+    # do not appear (no model, no judge).
+    verify: bool = False
 
 
 @dataclass
@@ -84,6 +88,8 @@ class PipelineResult:
     chunks: list[Chunk] = field(default_factory=list)
     # Execution statistics (numbers only; never document content).
     stats: dict[str, Any] = field(default_factory=dict)
+    # Mechanical claim verification, when requested (never a model judge).
+    verification: Any = None
 
     @property
     def chunk_provenance(self) -> list[dict[str, Any]]:
@@ -243,6 +249,7 @@ class Pipeline:
             "max_pdf_pages": self.config.input.max_pdf_pages,
             "max_extracted_bytes": self.config.input.max_extracted_bytes,
             "ocr_timeout_seconds": self.config.input.ocr_timeout_seconds,
+            "structure_tables": self.config.input.structure_tables,
             "ocr": opts.ocr,
         }
         document = read_source(source, diag=self.diag, options=options)
@@ -286,6 +293,7 @@ class Pipeline:
         duration: float,
         chunk_provenance: list[dict[str, Any]] | None = None,
         stats: dict[str, Any] | None = None,
+        verification: dict[str, Any] | None = None,
     ) -> str:
         envelope = build_json_envelope(
             summary,
@@ -303,6 +311,8 @@ class Pipeline:
         )
         if stats:
             envelope["stats"] = stats
+        if verification is not None:
+            envelope["verification"] = verification
         return dumps_json(envelope)
 
     # -- prompts ---------------------------------------------------------------
@@ -435,6 +445,12 @@ class Pipeline:
 
         self._check_cancelled()
         warnings = self.diag.take_warnings()
+        verification = None
+        if opts.verify:
+            verification = verify_summary(
+                summary if isinstance(summary, str) else str(summary),
+                document.content,
+            )
         duration = time.monotonic() - start
         stats["total_seconds"] = round(duration, 3)
         generated = stats.get("generated_tokens_est")
@@ -459,6 +475,7 @@ class Pipeline:
                 duration=duration,
                 chunk_provenance=provenance,
                 stats=stats if opts.stats else None,
+                verification=verification.to_json() if verification is not None else None,
             )
         else:
             text = self._format_text(text if isinstance(text, str) else str(text), opts.output_format)
@@ -476,6 +493,7 @@ class Pipeline:
             output_format=opts.output_format,
             chunks=chunks if len(chunks) > 1 else [],
             stats=stats,
+            verification=verification,
         )
 
     # -- execution paths ------------------------------------------------------

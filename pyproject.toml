@@ -27,9 +27,16 @@ classifiers = [
 # (PDF, OCR) is isolated behind optional extras.
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/adigaiki/local-terminal-summarizer"
+Repository = "https://github.com/adigaiki/local-terminal-summarizer"
+Issues = "https://github.com/adigaiki/local-terminal-summarizer/issues"
+
 [project.optional-dependencies]
-pdf = ["pypdf>=4.0"]
-ocr = ["pypdf>=4.0", "pytesseract>=0.3.10", "pdf2image>=1.16"]
+# fontTools lets pypdf decode CFF/Type1 font encodings; without it pypdf logs a
+# warning per font, which floods stderr on real papers.
+pdf = ["pypdf>=4.0", "fonttools>=4.0"]
+ocr = ["pypdf>=4.0", "fonttools>=4.0", "pytesseract>=0.3.10", "pdf2image>=1.16"]
 test = ["pytest>=8.0", "pypdf>=4.0"]
 
 [project.scripts]

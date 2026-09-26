@@ -18,6 +18,7 @@ from summarizer.document.reader import (
     checked_size,
     effective_limit,
 )
+from summarizer.document.tables import count_structured_tables, structure_tables
 from summarizer.errors import InputError
 from summarizer.log import Diagnostics
 
@@ -66,6 +67,8 @@ def extract_pdf_pages(path: Path, *, diag: Diagnostics, options: dict | None = N
 
     max_extracted = effective_limit(options.get("max_extracted_bytes"), ABSOLUTE_MAX_BYTES)
     max_lines = effective_limit(options.get("max_lines"), ABSOLUTE_MAX_LINES)
+    structure = bool(options.get("structure_tables", True))
+    structured_tables = 0
     total_bytes = total_lines = 0
     pages: list[str] = []
     for index, page in enumerate(reader.pages, start=1):
@@ -75,6 +78,9 @@ def extract_pdf_pages(path: Path, *, diag: Diagnostics, options: dict | None = N
             if len(diag.warnings) < 200:
                 diag.warn(f"PDF page {index}: text extraction failed ({exc}); skipping")
             text = ""
+        if structure and text:
+            text, count = structure_tables(text)
+            structured_tables += count
         # Bound as we accumulate: the limit must hold *before* the whole
         # document has been pulled into memory, not after.
         total_bytes += len(text.encode("utf-8")) + bool(pages)
@@ -162,6 +168,9 @@ def read_pdf(path: Path, *, diag: Diagnostics, options: dict | None = None) -> D
     meta["page_starts"] = starts
     meta["pdf"] = True
     meta["extracted_bytes"] = sum(len(page.encode("utf-8")) for page in pages)
+    structured = count_structured_tables(content)
+    if structured:
+        meta["structured_tables"] = structured
     if options.get("ocr"):
         meta["ocr"] = True
     warnings = diag.take_warnings()

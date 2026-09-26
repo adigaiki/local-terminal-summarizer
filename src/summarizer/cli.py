@@ -51,7 +51,7 @@ class _UsageErrorParser(argparse.ArgumentParser):
 
     argparse hard-codes exit status 2 for usage errors, but this program
     reserves 2 for local *engine* errors and documents 1 as the "input or
-    usage error" status (see README "Exit status"). Overriding ``error``
+    usage error" status (see docs/cli.md "Exit status"). Overriding ``error``
     keeps that contract intact instead of silently colliding with it.
     """
 
@@ -148,6 +148,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stats", action="store_true",
                         help="print execution statistics to stderr (and into "
                              "JSON output when --format json)")
+    parser.add_argument("--verify", action="store_true",
+                        help="mechanically flag summary numbers/expansions that "
+                             "do not appear in the source (no model judge)")
     parser.add_argument("--no-progress", action="store_true",
                         help="disable the progress display (stderr)")
     parser.add_argument("--encoding", metavar="NAME", default=None,
@@ -448,6 +451,7 @@ def _run_summarize(args, config: Config, diag: Diagnostics, *, cancel: CancelTok
         context_file=args.context,
         ocr=args.ocr,
         stats=bool(args.stats),
+        verify=bool(args.verify),
     )
     reporter = build_progress(
         diag, enabled=config.defaults.progress and not args.no_progress
@@ -510,6 +514,9 @@ def _run_summarize(args, config: Config, diag: Diagnostics, *, cancel: CancelTok
 
     if args.stats:
         _print_stats(result, stream=sys.stderr)
+    if args.verify and getattr(result, "verification", None) is not None:
+        sys.stderr.write(result.verification.render() + "\n")
+        sys.stderr.flush()
 
     if session is not None:
         from summarizer.session import record_selected
