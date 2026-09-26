@@ -28,7 +28,7 @@ verification: no unverified claims (34 numbers, 0 expansions checked)
 ```console
 $ summarize paper.pdf --verify
 <the summary appears on stdout>
-verification: 2 unverified claim(s) (34 numbers, 1 expansions checked)
+verification: 2 unverified claims (34 numbers, 1 expansion checked)
   number: 89.42(2)
   expansion: M.E.W. (Molecular Ensemble with Water)
 ```

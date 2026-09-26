@@ -106,6 +106,28 @@ def test_report_renders_and_serializes():
     assert payload["unverified"]
 
 
+def test_report_pluralizes_counts():
+    # One number checked, no expansions: singular "number".
+    one_number = verify_summary("value 1234.56 units", "value 1234.56 units")
+    text = one_number.render()
+    assert "1 number," in text
+    assert "numbers" not in text
+
+    # One expansion checked, no numbers: singular "expansion".
+    one_expansion = verify_summary(
+        "S.O. (silicone oil) was used.",
+        "pressure media: m.e.w. and silicone oil (s.o.)",
+    )
+    text = one_expansion.render()
+    assert "1 expansion checked" in text
+    assert "1 expansions" not in text
+
+    # A single flag is one "claim", not "claim(s)".
+    assert "1 unverified claim " in verify_summary(
+        "invented 4242.42 here", "nothing relevant"
+    ).render()
+
+
 # --- pipeline wiring --------------------------------------------------------
 
 

@@ -288,7 +288,7 @@ not edit the summary. With `--format json` it becomes a top-level
 ```console
 $ summarize paper.pdf --verify
 <summary on stdout>
-verification: 2 unverified claim(s) (34 numbers, 1 expansions checked)
+verification: 2 unverified claims (34 numbers, 1 expansion checked)
   number: 89.42(2)
   expansion: M.E.W. (Molecular Ensemble with Water)
 ```
@@ -329,10 +329,11 @@ exist — both are covered in [docs/performance.md](docs/performance.md),
 
 ## Commands
 
+**Subcommands**
+
 | Command | Purpose |
 | --- | --- |
 | `summarize FILE` / `-` | summarize a file or stdin |
-| `summarize FILE --verify` | flag summary numbers/expansions absent from the source (advisory; see above) |
 | `summarize doctor` | installation, configuration, backend, model, and cache diagnostics |
 | `summarize models` | models the configured local backend reports |
 | `summarize profiles` | installed profiles and their prompt identity |
@@ -342,7 +343,20 @@ exist — both are covered in [docs/performance.md](docs/performance.md),
 | `summarize session start\|end\|status` | group runs under a named local record |
 | `summarize completions bash\|zsh\|fish` | shell completion script |
 
-Options and exit status: [docs/cli.md](docs/cli.md).
+**Notable flags**
+
+| Flag | Purpose |
+| --- | --- |
+| `--profile NAME` | `plain` (default), `code`, `academic`, or `meeting` |
+| `--format json` | stable JSON envelope with chunk provenance |
+| `--verify` | flag summary numbers/expansions absent from the source (advisory) |
+| `--context FILE` | trusted supplemental context, kept separate from the document |
+| `--dry-run` | plan the run; contacts no backend |
+| `--stats` | timing and token estimates on stderr |
+| `--ocr` | OCR a scanned PDF (optional extra) |
+| `-o FILE` | write output atomically to a file |
+
+Every option and the exit status are in [docs/cli.md](docs/cli.md).
 
 ## Evaluation is mechanical
 

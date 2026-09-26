@@ -61,15 +61,22 @@ class VerificationReport:
     def ok(self) -> bool:
         return not self.unverified
 
+    def _counts(self) -> str:
+        numbers = f"{self.numbers_checked} number" + (
+            "" if self.numbers_checked == 1 else "s"
+        )
+        expansions = f"{self.expansions_checked} expansion" + (
+            "" if self.expansions_checked == 1 else "s"
+        )
+        return f"{numbers}, {expansions} checked"
+
     def render(self) -> str:
         if self.ok:
-            return (
-                f"verification: no unverified claims "
-                f"({self.numbers_checked} numbers, {self.expansions_checked} expansions checked)"
-            )
+            return f"verification: no unverified claims ({self._counts()})"
+        count = len(self.unverified)
         lines = [
-            f"verification: {len(self.unverified)} unverified claim(s) "
-            f"({self.numbers_checked} numbers, {self.expansions_checked} expansions checked)"
+            f"verification: {count} unverified "
+            f"{'claim' if count == 1 else 'claims'} ({self._counts()})"
         ]
         for claim in self.unverified:
             lines.append(f"  {claim.kind}: {claim.text}")
