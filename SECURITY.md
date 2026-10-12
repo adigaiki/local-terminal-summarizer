@@ -28,7 +28,7 @@ Readers do not execute, fetch, or render anything: Markdown is never converted t
 
 ## Local-only core
 
-There is no cloud API, telemetry, analytics, or update channel in normal operation; everything stays on loopback. The backend endpoint defaults to `http://localhost:11434`; configure your own local endpoint/model. `--check-update` is the only opt-in network operation and requires you to set a URL yourself; without it the tool performs no update traffic.
+There is no cloud API, telemetry, analytics, or update channel in normal operation. The backend endpoint defaults to loopback (`http://localhost:11434`); configure your own endpoint/model, and note that pointing `endpoint` at a non-loopback host sends document text there. `--check-update` is the only other opt-in network operation and requires a URL you set yourself; without it the tool performs no update traffic.
 
 Backends are local adapters (Ollama, generic OpenAI-compatible, llama.cpp server, LM Studio). No cloud provider is implemented or configured. `summarize models`, `summarize doctor`, and `summarize evaluate` contact only the configured local endpoint; `evaluate --dry-run` contacts nothing. No models are downloaded, no models are installed, and no model is selected automatically.
 

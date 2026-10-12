@@ -10,8 +10,12 @@ llama.cpp, LM Studio, or any OpenAI-compatible server). It is a Unix tool:
 pipe a document in, get a summary on stdout, with long-document chunking, a
 trusted/untrusted input boundary, stable JSON output, and diagnostics.
 
-Nothing is sent to the internet. The tool talks to your model server over
-loopback (`http://localhost:11434` by default) and nowhere else.
+Nothing is sent to the internet by default. Every request goes to a model
+server on your own machine, over loopback (`http://localhost:11434`). Two
+things you can opt into produce other traffic: `--check-update`, which makes
+one request to a URL you configure in `[update]`, and pointing `endpoint` at a
+non-loopback host, which sends the document there. See
+[docs/security.md](docs/security.md).
 
 - MIT-licensed, Python 3.11+.
 - The core install has **zero runtime dependencies** beyond Python; PDF and
@@ -355,6 +359,7 @@ exist — both are covered in [docs/performance.md](docs/performance.md),
 | `--dry-run` | plan the run; contacts no backend |
 | `--stats` | timing and token estimates on stderr |
 | `--ocr` | OCR a scanned PDF (optional extra) |
+| `--check-update` | one explicit request to a URL you configure in `[update]`; never automatic |
 | `-o FILE` | write output atomically to a file |
 
 Every option and the exit status are in [docs/cli.md](docs/cli.md).

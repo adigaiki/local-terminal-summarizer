@@ -5,14 +5,14 @@ practical summary.
 
 ## Local-only core
 
-Normal summarization sends nothing off your machine: it talks only to the
-local backend over loopback. There is no telemetry, analytics, cloud API,
-remote logging, or model download. The backend endpoint defaults to
-`http://localhost:11434`; point it at whatever local server you run.
+Normal summarization talks only to the backend endpoint you configure, which
+defaults to loopback (`http://localhost:11434`); nothing is sent to the
+internet unless you point `endpoint` at a non-loopback host yourself. There is
+no telemetry, analytics, cloud API, remote logging, or model download.
 
-`--check-update` is the only network operation, and only when you configure a
-URL yourself. `summarize models`, `doctor`, and `evaluate` contact only the
-configured local endpoint; `evaluate --dry-run` contacts nothing.
+The only other network operation is `--check-update`: one explicit request to a
+URL you set in `[update]`. `summarize models`, `doctor`, and `evaluate` contact
+only the configured local endpoint; `evaluate --dry-run` contacts nothing.
 
 ## Configuration and secrets
 

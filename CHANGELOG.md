@@ -18,6 +18,8 @@ it is, "released" means a git tag. Design notes and rationale live in
   the first honest quality benchmark (claims, results, caveats).
 - Fixed a flaky CI failure in the response-cap loopback test on Python 3.11
   (the test server now drains the request body and sends `Content-Length`).
+- **Docs:** the README's network claim is now precise (loopback by default, with
+  the opt-in exceptions named), and `--check-update` is documented there.
 
 ## v0.6.0 — 2026-09-21
 
