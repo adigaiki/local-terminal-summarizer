@@ -47,6 +47,7 @@ missing. It is one small tool, not a chat client.
 - [Evaluation is mechanical](#evaluation-is-mechanical)
 - [Speed and system load](#speed-and-system-load)
 - [Troubleshooting](#troubleshooting)
+- [When not to use this](#when-not-to-use-this)
 - [Documentation](#documentation)
 - [Contributing, changelog, license](#contributing-changelog-license)
 
@@ -409,6 +410,28 @@ Ollama but are untested here.
 - **No input / TTY** — `summarize` with no argument and a TTY stdin errors
   instead of hanging; pass a file or `-`.
 
+## When not to use this
+
+`summarize` produces a probabilistic summary from a local model. It is the
+wrong tool when being wrong is expensive:
+
+- **Anything where a wrong number or claim matters** — legal, medical,
+  financial, or safety-critical text. `--verify` is a grep for numbers and
+  `ACRONYM (expansion)` phrases, not fact-checking, and a clean report is not
+  proof. Treat `--format json` output as untrusted input at any automation
+  boundary ([docs/verify.md](docs/verify.md)).
+- **Wide tables on a small model.** Structured table extraction fixes column
+  *assignment*, not judgment; a 3B model can still garble an 8-column table.
+- **Documents that need reasoning across the whole text.** Map-reduce
+  summarizes each chunk independently, so a term defined in one part and used
+  far away can be lost. Prefer a model whose context holds the document in one
+  direct call — `--dry-run` shows the plan, and `--strict` refuses to chunk.
+- **Content you would not send to a local model.** The tool does not redact;
+  the model sees the document.
+
+The honest state of summary quality, and why this list exists, is in
+[docs/quality.md](docs/quality.md).
+
 ## Documentation
 
 The README is the orientation; the detail lives in [docs/](docs/index.md).
@@ -426,7 +449,7 @@ The README is the orientation; the detail lives in [docs/](docs/index.md).
 | [Design and safety](docs/design.md) | the trust boundary and aggregation |
 | [Security and privacy](docs/security.md) | local-only guarantees, local state |
 | [Evaluation](docs/evaluation.md) | the local evaluation harness |
-| [Summary quality](docs/quality.md) | the first manual claims benchmark, and its caveats |
+| [Summary quality](docs/quality.md) | the first manual claims benchmark (small, on a 3B model, with confounds) and its caveats |
 
 ## Contributing, changelog, license
 
