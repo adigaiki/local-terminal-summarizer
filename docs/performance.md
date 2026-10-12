@@ -24,6 +24,31 @@ corrupt an existing file, and an interrupted run is not recorded into a
 session. Streaming requests are interrupted promptly; a non-streaming request
 that has already been sent is bounded by `--timeout`.
 
+## Timeouts
+
+Three different waits are bounded, because a local model behaves differently
+while reading a prompt than while generating:
+
+| Phase | Bound | Key |
+| --- | --- | --- |
+| Connect (and response headers) | `min(timeout_seconds, 5s)` | `[engine] timeout_seconds` |
+| Non-streaming: whole request | total deadline, `timeout_seconds` | `[engine] timeout_seconds` (`--timeout`) |
+| Streaming: before the first byte | `first_token_timeout_seconds` | `[engine] first_token_timeout_seconds` |
+| Streaming: after the first byte | idle, reset on every byte, `timeout_seconds` | `[engine] timeout_seconds` |
+
+The distinction matters for CPU-bound models: **prompt processing** can take
+minutes before any token is emitted, so the wait for the first byte is given a
+longer, separate budget, while a stream that has started and then goes quiet is
+cut off after the (shorter) idle timeout. A steady stream is not killed by its
+total length. Cancellation is still observed within about half a second
+regardless of these limits.
+
+```toml
+[engine]
+timeout_seconds = 60             # connect + non-streaming total + streaming idle
+first_token_timeout_seconds = 600  # streaming: wait for the first byte
+```
+
 ## Bounded concurrency
 
 Independent map chunks can run with bounded concurrency (default `1`, which is

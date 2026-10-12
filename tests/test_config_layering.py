@@ -253,3 +253,11 @@ def test_allow_non_loopback_defaults_off_and_is_configurable(monkeypatch, tmp_pa
 
     monkeypatch.setenv("SUMMARIZER_ALLOW_NON_LOOPBACK", "1")
     assert load_config(user_path=tmp_path / "none.toml").engine.allow_non_loopback is True
+
+
+def test_first_token_timeout_defaults_and_env(monkeypatch, tmp_path):
+    assert load_config(user_path=tmp_path / "none.toml").engine.first_token_timeout_seconds == 600
+    monkeypatch.setenv("SUMMARIZER_FIRST_TOKEN_TIMEOUT", "120")
+    cfg = load_config(user_path=tmp_path / "none.toml")
+    assert cfg.engine.first_token_timeout_seconds == 120
+    assert cfg.origin("engine.first_token_timeout_seconds") == SOURCE_ENV

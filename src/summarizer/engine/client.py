@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import queue
 import socket
+import threading
 import time
 from typing import Any, BinaryIO, Iterator
 from urllib.parse import urlsplit
@@ -59,6 +61,7 @@ class HttpClient:
         connect_timeout: float | None = None,
         diag: Diagnostics | None = None,
         max_response_bytes: int = 0,
+        first_token_timeout: float | None = None,
     ) -> None:
         parsed = urlsplit(endpoint if "://" in endpoint else f"http://{endpoint}")
         if parsed.scheme not in ("http", "https"):
@@ -71,6 +74,13 @@ class HttpClient:
         self.connect_timeout = connect_timeout if connect_timeout is not None else min(timeout, _DEFAULT_CONNECT_TIMEOUT)
         # Memory bound for response bodies and SSE event buffers. 0 disables.
         self.max_response_bytes = max(0, int(max_response_bytes))
+        # Streaming-only wait for the first byte (prompt processing can be slow
+        # on CPU). None falls back to the idle timeout.
+        self.first_token_timeout = (
+            float(first_token_timeout)
+            if first_token_timeout and first_token_timeout > 0
+            else None
+        )
         self.diag = diag
         # Optional cooperative cancellation token (see summarizer.cancel).
         self.cancel: object | None = None
@@ -220,14 +230,31 @@ class HttpClient:
         *,
         timeout: float | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """POST and yield parsed JSON events from a Server-Sent-Events reply."""
+        """POST and yield parsed JSON events from a Server-Sent-Events reply.
+
+        Two streaming-only deadlines apply, because prompt processing can take
+        far longer than token generation on a CPU-bound model:
+
+          * **before the first byte**: bounded by ``first_token_timeout`` (the
+            server may still be processing the prompt);
+          * **after the first byte**: an *idle* timeout of ``timeout`` seconds,
+            reset on every byte received, so a steady stream is never killed by
+            how long it runs.
+
+        A ``timeout`` that is used instead for non-streaming requests is a total
+        deadline (see :meth:`_read_body`). Cancellation is still polled every
+        ``_POLL_INTERVAL`` seconds regardless.
+        """
         timeout = self.timeout if timeout is None else timeout
-        deadline = time.monotonic() + timeout
+        first_token_timeout = self.first_token_timeout or timeout
         conn = self._new_connection()
         resp = self._send(conn, "POST", path, payload, timeout=timeout)
         try:
             if resp.status not in (200, 201):
-                body = self._read_body(resp, timeout=timeout, deadline=deadline, conn=conn, path=path)
+                body = self._read_body(
+                    resp, timeout=timeout, deadline=time.monotonic() + timeout,
+                    conn=conn, path=path,
+                )
                 raise HttpStatusError(resp.status, body.decode("utf-8", "replace"), path=path)
             # SSE events arrive delimiter-to-delimiter; a malicious or broken
             # server can withhold the blank line forever. Bound the buffer so
@@ -235,38 +262,90 @@ class HttpClient:
             # cap when one is configured; 1 MiB otherwise).
             buffer = ""
             buffer_limit = max(self.max_response_bytes, 1_048_576)
-            while True:
-                if self._cancelled():
-                    raise Interrupted("interrupted")
-                if deadline - time.monotonic() <= 0:
-                    raise EngineTimeout("stream timed out before completion")
-                _set_socket_timeout(
-                    conn, min(_POLL_INTERVAL, max(0.1, deadline - time.monotonic())), resp
-                )
+
+            # The reader does blocking reads; the consumer enforces the
+            # first-token/idle deadlines and cancellation. Clear the request
+            # timeout _send applied so the reader does not time out first.
+            _stream_socket = _response_socket(conn, resp)
+            if _stream_socket is not None:
                 try:
-                    # read1 returns whatever is available without waiting to
-                    # fill a buffer, so a poll timeout loses no partial event.
-                    data = resp.read1(65536) if hasattr(resp, "read1") else resp.readline()
-                except (socket.timeout, TimeoutError):
-                    continue
-                if not data:
-                    break
-                buffer += data.decode("utf-8", "replace") if isinstance(data, bytes) else data
-                if len(buffer) > buffer_limit:
-                    raise MalformedResponse(
-                        f"streamed event from {path} exceeded {buffer_limit} bytes without a delimiter",
-                        hint="the local server is not emitting valid SSE framing",
-                    )
-                while "\n\n" in buffer or "\r\n\r\n" in buffer:
-                    if "\r\n\r\n" in buffer:
-                        event, buffer = buffer.split("\r\n\r\n", 1)
-                    else:
-                        event, buffer = buffer.split("\n\n", 1)
-                    parsed = _parse_sse_event(event)
-                    if parsed is not None:
-                        if parsed == "DONE":
+                    _stream_socket.settimeout(None)
+                except OSError:  # pragma: no cover - socket already gone
+                    pass
+
+            # Reads happen in a small worker thread so the consumer can poll
+            # cancellation and the idle/first-token deadlines without touching
+            # socket timeouts (CPython marks a socket with a fired read timeout
+            # unusable, which would break a slow-but-steady stream). Blocking
+            # reads there also see buffered and chunk-decoded bytes correctly.
+            chunks: "queue.Queue[tuple[str, object]]" = queue.Queue(maxsize=8)
+            stop = threading.Event()
+
+            def reader() -> None:
+                try:
+                    while not stop.is_set():
+                        data = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
+                        if not data:
+                            _put(chunks, stop, ("eof", None))
                             return
-                        yield parsed
+                        if not _put(chunks, stop, ("data", data)):
+                            return
+                except BaseException as exc:  # surfaced to the consumer
+                    _put(chunks, stop, ("error", exc))
+
+            thread = threading.Thread(target=reader, name="summarize-stream", daemon=True)
+            thread.start()
+            last_activity = time.monotonic()
+            started = False
+            try:
+                while True:
+                    if self._cancelled():
+                        raise Interrupted("interrupted")
+                    now = time.monotonic()
+                    limit = (
+                        timeout if (started or first_token_timeout <= 0) else first_token_timeout
+                    )
+                    idle = now - last_activity
+                    if idle > limit:
+                        where = "after the first token" if started else "before the first token"
+                        raise EngineTimeout(
+                            f"stream stalled {where} (no data for {idle:.0f}s, "
+                            f"limit {limit:.0f}s)"
+                        )
+                    try:
+                        kind, payload = chunks.get(timeout=min(_POLL_INTERVAL, max(0.05, limit - idle)))
+                    except queue.Empty:
+                        continue
+                    if kind == "eof":
+                        break
+                    if kind == "error":
+                        raise payload  # type: ignore[misc]
+                    data = payload
+                    last_activity = time.monotonic()
+                    started = True
+                    buffer += data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+                    if len(buffer) > buffer_limit:
+                        raise MalformedResponse(
+                            f"streamed event from {path} exceeded {buffer_limit} bytes without a delimiter",
+                            hint="the local server is not emitting valid SSE framing",
+                        )
+                    while "\n\n" in buffer or "\r\n\r\n" in buffer:
+                        if "\r\n\r\n" in buffer:
+                            event, buffer = buffer.split("\r\n\r\n", 1)
+                        else:
+                            event, buffer = buffer.split("\n\n", 1)
+                        parsed = _parse_sse_event(event)
+                        if parsed is not None:
+                            if parsed == "DONE":
+                                return
+                            yield parsed
+            finally:
+                stop.set()
+                try:
+                    conn.close()
+                except Exception:  # pragma: no cover - close is best-effort
+                    pass
+                thread.join(timeout=1.0)
         except socket.timeout as exc:
             raise EngineTimeout("stream timed out before completion") from exc
         except TimeoutError as exc:
@@ -304,19 +383,29 @@ def _set_socket_deadline(conn: http.client.HTTPConnection, deadline: float) -> N
         sock.settimeout(max(0.1, remaining))
 
 
-def _set_socket_timeout(conn: http.client.HTTPConnection, seconds: float, resp=None) -> None:
-    """Set a short poll timeout without treating it as a request failure.
+def _put(chunks: "queue.Queue", stop: threading.Event, item) -> bool:
+    """Enqueue a stream item, giving up promptly once polling has stopped."""
+    while not stop.is_set():
+        try:
+            chunks.put(item, timeout=0.2)
+            return True
+        except queue.Full:
+            continue
+    return False
 
-    ``http.client`` may clear ``conn.sock`` once a response begins
-    (notably for connection-close framing), so fall back to the socket owned
-    by the response's buffered reader.
+
+def _response_socket(conn: http.client.HTTPConnection, resp=None):
+    """The underlying socket for a response, or ``None`` if it cannot be found.
+
+    ``http.client`` may clear ``conn.sock`` once a response begins (notably for
+    connection-close framing), so fall back to the socket owned by the
+    response's buffered reader.
     """
     sock = getattr(conn, "sock", None)
     if sock is None and resp is not None:
         raw = getattr(getattr(resp, "fp", None), "raw", None)
         sock = getattr(raw, "_sock", None)
-    if sock is not None:
-        sock.settimeout(max(0.05, seconds))
+    return sock
 
 
 class HttpStatusErrorKinds:

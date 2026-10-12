@@ -66,6 +66,7 @@ class OpenAICompatEngine(Engine):
             timeout=self.timeout_seconds,
             diag=self._diag,
             max_response_bytes=settings.max_response_bytes,
+            first_token_timeout=settings.first_token_timeout_seconds,
         )
         self._capabilities: EngineCapabilities | None = None
         self._config_context_length = int(settings.context_length or 0)

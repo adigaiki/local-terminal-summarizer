@@ -27,6 +27,12 @@ it is, "released" means a git tag. Design notes and rationale live in
 - **Packaging:** the distribution is named `local-terminal-summarizer` (the
   import package stays `summarizer`, the command stays `summarize`), because an
   unrelated project owns `summarizer` on PyPI. Not published yet.
+- **Streaming timeouts:** streaming waits for the first byte up to
+  `[engine] first_token_timeout_seconds` (default 600; prompt processing on a
+  CPU-bound model can be slow), then applies `timeout_seconds` as an idle
+  timeout reset on every byte. Non-streaming keeps the total `timeout_seconds`
+  deadline. The stream transport no longer polls with socket read timeouts
+  (which poisoned the socket on the first stall).
 
 ## v0.6.0 — 2026-09-21
 

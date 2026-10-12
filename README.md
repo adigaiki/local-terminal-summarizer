@@ -409,8 +409,14 @@ Ollama but are untested here.
 - **Empty summary or "PDF text extraction failed"** — the PDF is probably a
   scan. Install the `ocr` extra plus system `tesseract`/Poppler and pass
   `--ocr`; confirm with `summarize doctor`.
-- **`summarize` hangs / times out** — lower `[engine] timeout_seconds` or pass
-  `--timeout`; a CPU-bound model can exceed the 60 s default on long inputs.
+- **`summarize` hangs / times out** — for a whole non-streaming request the
+  deadline is `[engine] timeout_seconds` (or `--timeout`). Streaming is more
+  forgiving: the wait for the *first* byte is `[engine]
+  first_token_timeout_seconds` (default 600, for slow CPU prompt processing),
+  and after that a stall is bounded by `timeout_seconds` as an idle timeout. A
+  CPU-bound model can legitimately exceed 60 s before its first token; raise
+  `first_token_timeout_seconds` rather than the idle timeout if that is the
+  case.
 - **`exceeds the model's context window`** — the token estimator under-counted
   for your tokenizer. The tool retries with smaller chunks automatically; if it
   still fails, raise the model's context window, lower `[engine] max_tokens`,

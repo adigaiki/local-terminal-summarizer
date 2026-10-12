@@ -39,6 +39,7 @@ max_tokens = 1024              # hard cap per map/reduce generation
 reasoning_effort = "none"      # none, low, medium, or high when supported
 # `reasoning` is accepted as a generic alias for `reasoning_effort`.
 allow_non_loopback = false     # refuses non-loopback endpoints unless true
+first_token_timeout_seconds = 600  # streaming: wait for the first byte
 
 [defaults]
 profile = "plain"

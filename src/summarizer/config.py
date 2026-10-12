@@ -93,6 +93,10 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         # content off this machine, so runs refuse it unless the user opts in
         # here. doctor and --dry-run only warn.
         "allow_non_loopback": False,
+        # Streaming-only: how long to wait for the first byte before giving up.
+        # Prompt processing on a CPU-bound model can take minutes; after the
+        # first byte a stall is bounded by timeout_seconds (idle).
+        "first_token_timeout_seconds": 600,
     },
     "defaults": {
         "profile": "plain",
@@ -172,6 +176,7 @@ _ENV_MAP: dict[str, tuple[str, str]] = {
     "SUMMARIZER_ENDPOINT": ("engine", "endpoint"),
     "SUMMARIZER_MODEL": ("engine", "model"),
     "SUMMARIZER_TIMEOUT": ("engine", "timeout_seconds"),
+    "SUMMARIZER_FIRST_TOKEN_TIMEOUT": ("engine", "first_token_timeout_seconds"),
     "SUMMARIZER_RETRIES": ("engine", "retries"),
     "SUMMARIZER_MAX_TOKENS": ("engine", "max_tokens"),
     "SUMMARIZER_MAX_RESPONSE_BYTES": ("engine", "max_response_bytes"),
@@ -200,6 +205,9 @@ class EngineSettings:
     endpoint: str = "http://localhost:11434"
     model: str = "llama3.1:8b"
     timeout_seconds: int = 60
+    # Streaming-only: wait for the first byte (prompt processing can be slow on
+    # CPU). After the first byte, stalls are bounded by timeout_seconds (idle).
+    first_token_timeout_seconds: int = 600
     retries: int = 1
     context_length: int = 0
     temperature: float = 0.3
@@ -454,6 +462,7 @@ def _convert_env(name: str, value: str) -> Any:
             ) from exc
     if name in (
         "SUMMARIZER_TIMEOUT",
+        "SUMMARIZER_FIRST_TOKEN_TIMEOUT",
         "SUMMARIZER_RETRIES",
         "SUMMARIZER_MAX_TOKENS",
         "SUMMARIZER_MAX_RESPONSE_BYTES",
@@ -590,6 +599,9 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         endpoint=_str(merged["engine"], "endpoint", ctx),
         model=_str(merged["engine"], "model", ctx),
         timeout_seconds=_int(merged["engine"], "timeout_seconds", ctx, minimum=1),
+        first_token_timeout_seconds=_int(
+            merged["engine"], "first_token_timeout_seconds", ctx, minimum=1, maximum=86400
+        ),
         retries=_int(merged["engine"], "retries", ctx, minimum=0, maximum=10),
         context_length=_int(merged["engine"], "context_length", ctx, minimum=0),
         temperature=_float(merged["engine"], "temperature", ctx, minimum=0.0, maximum=2.0),
