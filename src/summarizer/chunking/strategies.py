@@ -61,12 +61,15 @@ def budget_for(
     config_context_length: int = 0,
     context_file_tokens: int = 0,
     max_output_tokens: int = 0,
+    context_scale: float = 1.0,
 ) -> ContextBudget:
     """Compute the token budget for one generation request.
 
     Pure arithmetic lives in :mod:`summarizer.chunking.budget`; this wrapper
-    only resolves which context window applies and how big the trusted
-    material is.
+    only resolves which context window applies, how big the trusted material
+    is, and how much headroom to leave. ``context_scale`` (< 1.0) shrinks the
+    document budget for the retry-after-overflow path; it is multiplied with
+    the configured ``token_safety_margin`` (>= 1.0).
     """
     if config_context_length:
         context = int(config_context_length)
@@ -74,6 +77,8 @@ def budget_for(
     else:
         context = capabilities.effective_context_length
         source = capabilities.effective_context_source
+    margin = max(1.0, float(getattr(settings, "token_safety_margin", 1.0) or 1.0))
+    scale = max(0.0, float(context_scale)) / margin
     return compute_input_budget(
         context_length=context,
         prompt_tokens=prompt_token_overhead(profile),
@@ -81,6 +86,7 @@ def budget_for(
         reserved_output_tokens=max(settings.reserve_output_tokens, max_output_tokens),
         context_file_tokens=context_file_tokens,
         context_source=source,
+        budget_scale=scale,
     )
 
 
@@ -121,11 +127,14 @@ def chunking_decision(
     context_file_tokens: int = 0,
     max_chunks: int | None = None,
     max_output_tokens: int = 0,
+    context_scale: float = 1.0,
 ) -> ChunkingDecision:
     """Choose a strategy for ``content`` and prove it fits the budget.
 
     ``explicit_unit`` is "auto" (default), "tokens", or "chars". ``strict``
     turns an otherwise-silent chunking decision into a hard error.
+    ``context_scale`` (< 1.0) shrinks the effective window for the
+    retry-after-overflow path.
     """
     requested = (explicit_unit or "auto").strip().lower()
     unit = "tokens"
@@ -145,6 +154,7 @@ def chunking_decision(
         config_context_length=config_context_length,
         context_file_tokens=context_file_tokens,
         max_output_tokens=max_output_tokens,
+        context_scale=context_scale,
     )
     if budget.max_chunk_tokens < 1:
         raise InputError(

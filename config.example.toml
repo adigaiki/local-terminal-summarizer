@@ -71,6 +71,11 @@ max_chunks = 256
 # sequential behavior; higher values can help some local servers and hurt
 # others, so measure before raising it. Hard-capped at 8.
 concurrency = 1
+# Headroom on the document budget. The token estimator is a heuristic
+# (chars/4 vs words*1.4); a margin > 1 shrinks the per-chunk budget so a model
+# whose real tokenizer is denser than the estimate still fits. 1.0 leaves the
+# budget unchanged; 1.1-1.25 is a reasonable safety margin.
+token_safety_margin = 1.0
 
 [input]
 # 50 MiB / 1,000,000 lines. These limits also bound what may be read from an

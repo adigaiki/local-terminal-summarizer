@@ -52,6 +52,7 @@ overlap_tokens = 200
 reserve_output_tokens = 1000
 max_chunks = 256
 concurrency = 1                 # 1..8; see docs/performance.md
+token_safety_margin = 1.0       # >1 shrinks the document budget for headroom
 
 [input]
 max_bytes = 52428800

@@ -214,3 +214,30 @@ def test_dry_run_redacts_endpoint_credentials(tmp_path):
     rendered = report.render()
     assert "hunter2xyz" not in rendered
     assert "127.0.0.1:11434" in rendered
+
+
+# --- chunking: token safety margin ------------------------------------------
+
+
+def test_token_safety_margin_defaults_to_one(tmp_path):
+    assert load_config(user_path=tmp_path / "none.toml").chunking.token_safety_margin == 1.0
+
+
+def test_token_safety_margin_is_read_and_attributed(tmp_path):
+    user = _write(tmp_path / "user.toml", "[chunking]\ntoken_safety_margin = 1.25\n")
+    cfg = load_config(user_path=user)
+    assert cfg.chunking.token_safety_margin == 1.25
+    assert cfg.origin("chunking.token_safety_margin").startswith(SOURCE_USER)
+
+
+def test_token_safety_margin_below_one_is_rejected(tmp_path):
+    user = _write(tmp_path / "bad.toml", "[chunking]\ntoken_safety_margin = 0.5\n")
+    with pytest.raises(ConfigError, match="token_safety_margin"):
+        load_config(user_path=user)
+
+
+def test_token_safety_margin_env_variable(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUMMARIZER_TOKEN_SAFETY_MARGIN", "1.2")
+    cfg = load_config(user_path=tmp_path / "none.toml")
+    assert cfg.chunking.token_safety_margin == 1.2
+    assert cfg.origin("chunking.token_safety_margin") == SOURCE_ENV

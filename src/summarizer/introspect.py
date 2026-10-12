@@ -94,6 +94,7 @@ def _render_config_show(config: Config) -> str:
         f"  reserve_output_tokens = {config.chunking.reserve_output_tokens}",
         f"  max_chunks = {config.chunking.max_chunks}",
         f"  concurrency = {config.chunking.concurrency}    # from {_home_contracted(config.origin('chunking.concurrency'))}",
+        f"  token_safety_margin = {config.chunking.token_safety_margin}",
         "",
         "[input]",
         f"  max_bytes = {config.input.max_bytes}",

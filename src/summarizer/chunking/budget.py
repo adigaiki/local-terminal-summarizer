@@ -89,6 +89,7 @@ def compute_input_budget(
     context_file_tokens: int = 0,
     overhead_tokens: int = PROMPT_OVERHEAD_TOKENS,
     context_source: str = "fallback",
+    budget_scale: float = 1.0,
 ) -> ContextBudget:
     """Compute the usable document-input budget for one request.
 
@@ -96,6 +97,12 @@ def compute_input_budget(
     the profile/preamble prompt, the---optional---user context file and the
     fixed overhead are all subtracted from the window before any document
     content is admitted.
+
+    ``budget_scale`` (< 1.0) shrinks the resulting document budget without
+    changing the reported window: the pipeline uses it both for the opt-in
+    ``token_safety_margin`` (headroom against an estimator that underestimates
+    a denser tokenizer) and for the retry-after-overflow path. 1.0 leaves the
+    arithmetic exactly as analyzed.
 
     ``max_chunk_tokens`` is additionally clamped by ``max_tokens_per_chunk``,
     the operator's own preference for chunk size, and is 0 when the window is
@@ -108,12 +115,13 @@ def compute_input_budget(
     reserve = max(0, int(reserved_output_tokens))
     overhead = max(0, int(overhead_tokens))
     preferred_chunk = max(0, int(max_tokens_per_chunk))
+    scale = max(0.0, float(budget_scale))
 
     # `prompt_tokens` is documented as including the fixed overhead, but be
     # defensive: never let the two be double-counted if a caller passes only
     # the profile body.
     consumed = prompt + file_context + reserve
-    usable = max(0, context - consumed)
+    usable = max(0, int((context - consumed) * scale))
     max_chunk = min(preferred_chunk, usable) if preferred_chunk else usable
 
     return ContextBudget(

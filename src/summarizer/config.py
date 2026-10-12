@@ -111,6 +111,11 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         # Bounded parallelism for independent map-stage chunks. 1 preserves
         # the sequential behaviour exactly. Hard-capped at MAX_CONCURRENCY.
         "concurrency": 1,
+        # Multiplier applied to the usable document budget. The token
+        # estimator is a heuristic; a margin > 1 leaves headroom for a
+        # model whose real tokenizer is denser than the estimate. 1.0 keeps
+        # the analyzed budget exactly (no change).
+        "token_safety_margin": 1.0,
     },
     "input": {
         "max_bytes": 52428800,  # 50 MiB
@@ -174,6 +179,7 @@ _ENV_MAP: dict[str, tuple[str, str]] = {
     "SUMMARIZER_CHUNK_STRATEGY": ("defaults", "chunk_strategy"),
     "SUMMARIZER_MAX_CHUNKS": ("chunking", "max_chunks"),
     "SUMMARIZER_CONCURRENCY": ("chunking", "concurrency"),
+    "SUMMARIZER_TOKEN_SAFETY_MARGIN": ("chunking", "token_safety_margin"),
     "SUMMARIZER_PROGRESS": ("defaults", "progress"),
     "SUMMARIZER_CACHE": ("cache", "mode"),
     "SUMMARIZER_CACHE_DIR": ("cache", "dir"),
@@ -218,6 +224,10 @@ class ChunkingSettings:
     max_chunks: int = 256
     # Bounded map-stage parallelism; 1 keeps the original sequential behavior.
     concurrency: int = 1
+    # Headroom multiplier on the usable document budget (>= 1.0). 1.0 leaves
+    # the analyzed budget unchanged; 1.1-1.25 is a common safety margin for a
+    # tokenizer denser than the estimator.
+    token_safety_margin: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -425,6 +435,13 @@ def load_env_layer() -> dict[str, Any]:
 def _convert_env(name: str, value: str) -> Any:
     if name == "SUMMARIZER_PROGRESS":
         return value.strip().lower() in ("1", "true", "yes", "on")
+    if name == "SUMMARIZER_TOKEN_SAFETY_MARGIN":
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise ConfigError(
+                f"environment variable {name} must be a number, got {value!r}"
+            ) from exc
     if name in (
         "SUMMARIZER_TIMEOUT",
         "SUMMARIZER_RETRIES",
@@ -585,6 +602,9 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         reserve_output_tokens=_int(merged["chunking"], "reserve_output_tokens", ctx, minimum=0),
         max_chunks=_int(merged["chunking"], "max_chunks", ctx, minimum=1),
         concurrency=_int(merged["chunking"], "concurrency", ctx, minimum=1, maximum=MAX_CONCURRENCY),
+        token_safety_margin=_float(
+            merged["chunking"], "token_safety_margin", ctx, minimum=1.0, maximum=4.0
+        ),
     )
     input_settings = InputSettings(
         max_bytes=_int(merged["input"], "max_bytes", ctx, minimum=1),

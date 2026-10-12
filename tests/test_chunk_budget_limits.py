@@ -74,3 +74,31 @@ def test_splitter_combined_limits(text):
 def test_chars_decision_chunk_ceiling_accounts_for_tokens():
     with pytest.raises(InputError, match="maximum of 1"):
         decide("a " * 100, max_chunks=1)
+
+
+# --- token safety margin ----------------------------------------------------
+
+
+def test_token_safety_margin_default_leaves_the_budget_unchanged():
+    base = budget_for(CAPABILITIES, SETTINGS, PROFILE)
+    explicit = budget_for(CAPABILITIES, ChunkingSettings(
+        max_tokens_per_chunk=100, overlap_tokens=10, reserve_output_tokens=100,
+        token_safety_margin=1.0), PROFILE)
+    assert explicit.usable_input_tokens == base.usable_input_tokens
+    assert base.context_tokens == 1000  # the reported window is never scaled
+
+
+def test_token_safety_margin_shrinks_only_the_document_budget():
+    base = budget_for(CAPABILITIES, SETTINGS, PROFILE)
+    roomy = ChunkingSettings(max_tokens_per_chunk=100, overlap_tokens=10,
+                             reserve_output_tokens=100, token_safety_margin=2.0)
+    halved = budget_for(CAPABILITIES, roomy, PROFILE)
+    assert halved.context_tokens == base.context_tokens
+    assert halved.usable_input_tokens == base.usable_input_tokens // 2
+    assert halved.max_chunk_tokens <= halved.usable_input_tokens
+
+
+def test_context_scale_shrinks_the_budget_for_the_retry_path():
+    base = budget_for(CAPABILITIES, SETTINGS, PROFILE)
+    scaled = budget_for(CAPABILITIES, SETTINGS, PROFILE, context_scale=0.5)
+    assert scaled.usable_input_tokens == base.usable_input_tokens // 2
