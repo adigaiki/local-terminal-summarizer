@@ -89,6 +89,10 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         # (or anything impersonating one) must not be able to grow this
         # process's memory without bound. 0 disables the cap.
         "max_response_bytes": 33554432,
+        # The tool is local-first: a non-loopback endpoint sends document
+        # content off this machine, so runs refuse it unless the user opts in
+        # here. doctor and --dry-run only warn.
+        "allow_non_loopback": False,
     },
     "defaults": {
         "profile": "plain",
@@ -173,6 +177,7 @@ _ENV_MAP: dict[str, tuple[str, str]] = {
     "SUMMARIZER_MAX_RESPONSE_BYTES": ("engine", "max_response_bytes"),
     "SUMMARIZER_REASONING_EFFORT": ("engine", "reasoning_effort"),
     "SUMMARIZER_REASONING": ("engine", "reasoning"),
+    "SUMMARIZER_ALLOW_NON_LOOPBACK": ("engine", "allow_non_loopback"),
     "SUMMARIZER_PROFILE": ("defaults", "profile"),
     "SUMMARIZER_FORMAT": ("defaults", "output_format"),
     "SUMMARIZER_LANG": ("defaults", "lang"),
@@ -202,6 +207,9 @@ class EngineSettings:
     reasoning_effort: str = "none"
     # Cap on accumulated response bytes per HTTP exchange (0 disables).
     max_response_bytes: int = 33554432
+    # Refuse a non-loopback endpoint unless the user opts in: a remote endpoint
+    # sends document content off this machine.
+    allow_non_loopback: bool = False
 
 
 @dataclass(frozen=True)
@@ -435,6 +443,8 @@ def load_env_layer() -> dict[str, Any]:
 def _convert_env(name: str, value: str) -> Any:
     if name == "SUMMARIZER_PROGRESS":
         return value.strip().lower() in ("1", "true", "yes", "on")
+    if name == "SUMMARIZER_ALLOW_NON_LOOPBACK":
+        return value.strip().lower() in ("1", "true", "yes", "on")
     if name == "SUMMARIZER_TOKEN_SAFETY_MARGIN":
         try:
             return float(value)
@@ -586,6 +596,7 @@ def load_config(*, user_path: Path | None = None, project_path: Path | None = No
         max_tokens=_int(merged["engine"], "max_tokens", ctx, minimum=1),
         reasoning_effort=_reasoning_effort(merged["engine"], "reasoning_effort", ctx),
         max_response_bytes=_int(merged["engine"], "max_response_bytes", ctx, minimum=0),
+        allow_non_loopback=_bool(merged["engine"], "allow_non_loopback", ctx),
     )
     defaults = DefaultsSettings(
         profile=_str(merged["defaults"], "profile", ctx),

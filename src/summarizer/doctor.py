@@ -28,6 +28,7 @@ from summarizer.engine import Engine, EngineCapabilities, create_engine
 from summarizer.engine.capabilities import DEFAULT_CONTEXT_LENGTH
 from summarizer.errors import EngineError, ModelNotFound, SummarizerError
 from summarizer.log import Diagnostics, redact_url
+from summarizer.net import is_loopback_url
 
 __all__ = [
     "DoctorReport",
@@ -216,6 +217,35 @@ def diagnose(
     # 4. Engine
     if engine is None:
         engine = create_engine(config, diag=diag)
+
+    # 4b. Endpoint scope: a non-loopback endpoint sends document content off
+    # this machine. An actual run refuses it unless explicitly allowed; the
+    # doctor only reports it, loudly.
+    if is_loopback_url(engine.endpoint):
+        checks.append(
+            _check("Endpoint scope", True, message="loopback (document stays on this machine)")
+        )
+    elif config.engine.allow_non_loopback:
+        message = (
+            "non-loopback, explicitly allowed; document content will leave this machine"
+        )
+        checks.append(_check("Endpoint scope", True, message=message, optional=True))
+        diag.warn(message)
+    else:
+        message = (
+            "non-loopback and not allowed; summarization runs will refuse (exit 3)"
+        )
+        checks.append(
+            _check(
+                "Endpoint scope",
+                False,
+                message=message,
+                hint="set `[engine] allow_non_loopback = true` (or "
+                     "SUMMARIZER_ALLOW_NON_LOOPBACK=1) to summarize on a remote "
+                     "or LAN server",
+            )
+        )
+        diag.warn(f"{message}: {redact_url(engine.endpoint)}")
 
     # 5. Reachability
     reachable = False

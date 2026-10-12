@@ -20,6 +20,10 @@ it is, "released" means a git tag. Design notes and rationale live in
   (the test server now drains the request body and sends `Content-Length`).
 - **Docs:** the README's network claim is now precise (loopback by default, with
   the opt-in exceptions named), and `--check-update` is documented there.
+- **Behavior change:** a non-loopback `[engine] endpoint` is now refused
+  (exit 3) unless you opt in with `[engine] allow_non_loopback = true` (or
+  `SUMMARIZER_ALLOW_NON_LOOPBACK=1`); `doctor` and `--dry-run` warn instead of
+  refusing.
 
 ## v0.6.0 — 2026-09-21
 

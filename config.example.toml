@@ -50,6 +50,10 @@ reasoning_effort = "none"
 # Cap on accumulated response bytes per request (32 MiB). Protects against a
 # misbehaving local server growing memory without bound. 0 disables the cap.
 max_response_bytes = 33554432
+# Local-first default: a non-loopback endpoint sends document content off this
+# machine, so runs refuse it until you opt in here. doctor and --dry-run only
+# warn.
+allow_non_loopback = false
 
 [defaults]
 profile = "plain"

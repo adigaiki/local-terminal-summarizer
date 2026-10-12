@@ -29,8 +29,8 @@ from summarizer.config import Config, EngineSettings, user_prompt_dir
 from summarizer.document import Document, read_source
 from summarizer.engine import Engine, EngineCapabilities, create_engine
 from summarizer.engine.capabilities import CONTEXT_SOURCE_CONFIG, DEFAULT_CONTEXT_LENGTH
-from summarizer.errors import ContextOverflow, InputError
-from summarizer.log import Diagnostics
+from summarizer.errors import ConfigError, ContextOverflow, InputError
+from summarizer.log import Diagnostics, redact_url
 from summarizer.net import is_loopback_url
 from summarizer.output import (
     build_json_envelope,
@@ -130,6 +130,8 @@ class DryRunReport:
     prompt_identity: str = ""
     concurrency: int = 1
     cache_mode: str = "off"
+    # Whether document content stays on this machine for the planned endpoint.
+    endpoint_scope: str = ""
 
     def _origin(self, key: str) -> str:
         return self.origins.get(key, "built-in defaults")
@@ -164,6 +166,7 @@ class DryRunReport:
             f"  source:       {self._origin('engine.model')}",
             f"Endpoint:       {redact_url(self.engine.endpoint)}",
             f"  source:       {self._origin('engine.endpoint')}",
+            f"Endpoint scope: {self.endpoint_scope}",
             f"Max output:     {getattr(self.engine, 'max_tokens', 'n/a')} tokens/request",
             f"Reasoning:      {getattr(self.engine, 'reasoning_effort', 'n/a')} "
             f"({self._origin('engine.reasoning_effort')})",
@@ -210,6 +213,28 @@ class Pipeline:
 
     def _check_cancelled(self) -> None:
         self.cancel.raise_if_cancelled()
+
+    def _enforce_endpoint_scope(self, engine: Engine) -> None:
+        """Refuse a non-loopback endpoint unless the user opted in.
+
+        The tool is local-first: a remote endpoint sends the document off this
+        machine. ``doctor`` and ``--dry-run`` only warn; an actual run refuses
+        (a ConfigError, exit 3) before any request is made.
+        """
+        if is_loopback_url(engine.endpoint):
+            return
+        where = redact_url(engine.endpoint)
+        if not self.config.engine.allow_non_loopback:
+            raise ConfigError(
+                f"refusing to send document content to a non-loopback endpoint: {where}",
+                hint="set `[engine] allow_non_loopback = true` (or "
+                     "SUMMARIZER_ALLOW_NON_LOOPBACK=1) if you intend to "
+                     "summarize on a remote or LAN server",
+            )
+        self.diag.warn(
+            f"endpoint {where} is not loopback; document content will be sent "
+            "off this machine"
+        )
 
     # -- engine resolution ----------------------------------------------------
 
@@ -350,6 +375,7 @@ class Pipeline:
                 hint="expected one of: plain, markdown, json",
             )
         engine = self.resolve_engine(opts)
+        self._enforce_endpoint_scope(engine)
         if hasattr(engine, "set_cancel"):
             engine.set_cancel(self.cancel)
         max_output_tokens = getattr(engine, "max_tokens", self.config.engine.max_tokens)
@@ -843,6 +869,20 @@ class Pipeline:
         sample = built.text
         if len(sample) > 1400:
             sample = sample[:1400] + f"\n... [truncated {len(built.text) - 1400} chars]"
+        if is_loopback_url(engine.endpoint):
+            endpoint_scope = "loopback (document stays on this machine)"
+        elif self.config.engine.allow_non_loopback:
+            endpoint_scope = (
+                "NON-LOOPBACK, explicitly allowed — document content will leave "
+                "this machine"
+            )
+            self.diag.warn(endpoint_scope)
+        else:
+            endpoint_scope = (
+                "NON-LOOPBACK and not allowed — a run would refuse (exit 3); "
+                "set `[engine] allow_non_loopback = true` to allow it"
+            )
+            self.diag.warn(endpoint_scope)
         return DryRunReport(
             source=source or (document.source if document.source != "stdin" else "stdin"),
             document=document,
@@ -861,4 +901,5 @@ class Pipeline:
             ),
             concurrency=self.config.chunking.concurrency,
             cache_mode=self.config.cache.mode,
+            endpoint_scope=endpoint_scope,
         )

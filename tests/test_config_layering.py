@@ -241,3 +241,15 @@ def test_token_safety_margin_env_variable(monkeypatch, tmp_path):
     cfg = load_config(user_path=tmp_path / "none.toml")
     assert cfg.chunking.token_safety_margin == 1.2
     assert cfg.origin("chunking.token_safety_margin") == SOURCE_ENV
+
+
+def test_allow_non_loopback_defaults_off_and_is_configurable(monkeypatch, tmp_path):
+    assert load_config(user_path=tmp_path / "none.toml").engine.allow_non_loopback is False
+
+    user = _write(tmp_path / "user.toml", "[engine]\nallow_non_loopback = true\n")
+    cfg = load_config(user_path=user)
+    assert cfg.engine.allow_non_loopback is True
+    assert cfg.origin("engine.allow_non_loopback").startswith(SOURCE_USER)
+
+    monkeypatch.setenv("SUMMARIZER_ALLOW_NON_LOOPBACK", "1")
+    assert load_config(user_path=tmp_path / "none.toml").engine.allow_non_loopback is True
