@@ -21,16 +21,22 @@ permissions:
 
 jobs:
   test:
-    name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
-      # Report every supported interpreter's result, not just the first failure.
+      # Report every target's result, not just the first failure.
       fail-fast: false
       matrix:
         # 3.11 is the floor declared in pyproject.toml (requires-python >= 3.11);
         # 3.14 is the interpreter this release is developed and verified on.
-        python-version: ["3.11", "3.14"]
+        # Linux runs both; macOS runs one Python to keep minutes bounded. A
+        # macOS failure here is the signal that the POSIX assumptions (flock,
+        # paths, temp dirs, locale) need attention.
+        include:
+          - { os: ubuntu-latest, python-version: "3.11" }
+          - { os: ubuntu-latest, python-version: "3.14" }
+          - { os: macos-latest, python-version: "3.14" }
 
     steps:
       - name: Check out the repository
