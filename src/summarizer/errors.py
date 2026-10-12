@@ -24,6 +24,7 @@ __all__ = [
     "EngineTimeout",
     "EngineConnectionFailure",
     "CapabilityNotSupported",
+    "ContextOverflow",
     "Interrupted",
 ]
 
@@ -91,6 +92,15 @@ class EngineConnectionFailure(EngineError):
 
 class CapabilityNotSupported(EngineError):
     """The backend or model does not support a required capability."""
+
+
+class ContextOverflow(EngineError):
+    """The request was refused because it exceeds the model's context window.
+
+    Raised from a server 400/413 that names a context/length problem, or from
+    the client-side pre-flight assertion. The pipeline may retry with a
+    smaller chunk budget; under ``--strict`` it is a hard failure.
+    """
 
 
 class Interrupted(SummarizerError):

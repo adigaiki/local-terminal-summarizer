@@ -14,7 +14,7 @@ from summarizer.engine.backends import BackendSpec
 from summarizer.engine.base import Engine
 from summarizer.engine.capabilities import EngineCapabilities
 from summarizer.engine.client import HttpClient, HttpStatusError, HttpStatusErrorKinds
-from summarizer.errors import EngineError, InputError, MalformedResponse, ModelNotFound
+from summarizer.errors import ContextOverflow, EngineError, MalformedResponse, ModelNotFound
 from summarizer.chunking.token import estimate_tokens
 from summarizer.log import Diagnostics
 from summarizer.config import EngineSettings
@@ -96,7 +96,7 @@ class OpenAICompatEngine(Engine):
         if self._capabilities is not None:
             length = self._capabilities.context_length
             if length and estimated > length:
-                raise InputError(
+                raise ContextOverflow(
                     f"prompt of ~{estimate_tokens(prompt)} tokens plus "
                     f"{self.max_tokens} reserved output tokens exceeds the "
                     f"{length}-token context window",
@@ -301,6 +301,9 @@ class OpenAICompatEngine(Engine):
         model_missing = HttpStatusErrorKinds.model_missing(exc)
         if model_missing is not None:
             return model_missing
+        overflow = HttpStatusErrorKinds.context_overflow(exc)
+        if overflow is not None:
+            return overflow
         capability = HttpStatusErrorKinds.capability_refused(exc)
         if capability is not None:
             return capability

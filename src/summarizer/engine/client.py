@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 from summarizer.errors import (
     CapabilityNotSupported,
+    ContextOverflow,
     EngineConnectionFailure,
     EngineError,
     EngineTimeout,
@@ -341,5 +342,26 @@ class HttpStatusErrorKinds:
             return ModelNotFound(
                 f"the model is not available on the endpoint: {exc.body[:200]}",
                 hint="is the model pulled/loaded on the server? (`ollama run <model>`)",
+            )
+        return None
+
+    @staticmethod
+    def context_overflow(exc: HttpStatusError) -> ContextOverflow | None:
+        """A request the server refused because it does not fit the window.
+
+        Distinct from :meth:`capability_refused` (an unsupported parameter) so
+        the pipeline can retry with smaller chunks instead of failing.
+        """
+        if exc.status not in (400, 413):
+            return None
+        message = exc.body.lower()
+        if "context" in message and any(
+            token in message
+            for token in ("length", "window", "size", "exceed", "limit", "too long", "maximum", "token")
+        ):
+            return ContextOverflow(
+                f"the request exceeds the model's context window: {exc.body[:200]}",
+                hint="the tool retries with smaller chunks; if this persists, raise "
+                     "the context window or lower `[engine] max_tokens`",
             )
         return None

@@ -98,6 +98,10 @@ Oversized input is budgeted against the model's *discovered* context window
 (via the local server's metadata when it can be read, otherwise your configured
 `context_length`, otherwise a conservative fallback), then chunked at
 paragraph/sentence/word boundaries with overlap and summarized via map-reduce.
-Use `--chunk-strategy tokens|chars` to pick the sizing unit, and `--strict` to
-refuse chunking entirely instead of degrading to map-reduce. `--dry-run` reads
-and plans the request without probing or contacting a backend.
+The estimator is a heuristic, so if a backend still refuses a request as
+oversized the run retries once or twice with a smaller chunk budget (never
+under `--strict`, and only when that actually shrinks a chunk) and records the
+retry in the warnings. Use `[chunking] token_safety_margin` above 1.0 to leave
+headroom up front. Use `--chunk-strategy tokens|chars` to pick the sizing unit,
+and `--strict` to refuse chunking entirely instead of degrading to map-reduce.
+`--dry-run` reads and plans the request without probing or contacting a backend.

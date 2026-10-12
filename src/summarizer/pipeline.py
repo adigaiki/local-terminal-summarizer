@@ -29,7 +29,7 @@ from summarizer.config import Config, EngineSettings, user_prompt_dir
 from summarizer.document import Document, read_source
 from summarizer.engine import Engine, EngineCapabilities, create_engine
 from summarizer.engine.capabilities import CONTEXT_SOURCE_CONFIG, DEFAULT_CONTEXT_LENGTH
-from summarizer.errors import InputError
+from summarizer.errors import ContextOverflow, InputError
 from summarizer.log import Diagnostics
 from summarizer.net import is_loopback_url
 from summarizer.output import (
@@ -45,6 +45,11 @@ from summarizer.progress import ProgressReporter
 from summarizer.verify import verify_summary
 
 __all__ = ["Pipeline", "PipelineOptions", "PipelineResult", "DryRunReport"]
+
+# Retry-after-overflow: how many extra attempts, and how much to shrink the
+# document budget each time. Bounded so a misconfigured window cannot loop.
+_MAX_OVERFLOW_RETRIES = 2
+_CONTEXT_RETRY_SCALE = 0.75
 
 
 @dataclass(frozen=True)
@@ -363,32 +368,6 @@ class Pipeline:
         # The trusted --context file competes for the same context window, so
         # its size is part of the budget rather than an afterthought.
         context_file_tokens = estimate_tokens(context) if context else 0
-        decision = chunking_decision(
-            document.content,
-            capabilities=capabilities,
-            settings=self.config.chunking,
-            max_output_tokens=max_output_tokens,
-            profile=profile,
-            config_context_length=self.config.engine.context_length,
-            explicit_unit=opts.chunk_strategy or self.config.defaults.chunk_strategy,
-            strict=opts.strict,
-            context_file_tokens=context_file_tokens,
-            max_chunks=self.config.chunking.max_chunks,
-        )
-        aggregation = choose_strategy(decision)
-        chunks = chunk_document(
-            document.content,
-            decision=decision,
-            settings=self.config.chunking,
-            source=document.source,
-        )
-        chunks = document.annotate_chunks(chunks)
-        boundary: str | None = None
-        self._check_cancelled()
-
-        self.diag.progress(decision.describe())
-        if self.diag.verbose and decision.budget is not None:
-            self.diag.verbose_message(f"budget: {decision.budget.describe()}")
 
         # Capability negotiation: stream only when the caller asked for it and
         # the engine reports support. No backend name is consulted here.
@@ -399,49 +378,113 @@ class Pipeline:
                 "engine reports no streaming support; generating in a single request"
             )
 
-        stats: dict[str, Any] = {
-            "input_bytes": document.size,
-            "input_chars": document.char_count,
-            "input_tokens_est": document.token_estimate,
-            "chunks": len(chunks),
-            "strategy": aggregation.name,
-            "concurrency": self.config.chunking.concurrency,
-        }
         label = "stdin" if document.source == "stdin" else Path(document.source).name
         reporter = self.progress
-        if reporter is not None:
-            reporter.start(label=label, model=engine.model, total_chunks=len(chunks))
-        generation_started = time.monotonic()
-        try:
-            if decision.single_shot:
-                prompt = self._build_single_prompt(profile, chunks[0].text, opts, context)
-                boundary = prompt.boundary
-                summary, text = self._execute_single(
-                    prompt=prompt,
-                    engine=engine,
-                    capabilities=capabilities,
-                    fmt=opts.output_format,
-                    stream=effective_stream,
-                    emit=emit,
-                )
-                stats["generation_seconds"] = round(time.monotonic() - generation_started, 3)
-            else:
-                summary, text, boundary = self._execute_map_reduce(
-                    chunks=chunks,
-                    document=document,
-                    decision=decision,
-                    profile=profile,
-                    context=context,
-                    opts=opts,
-                    engine=engine,
-                    capabilities=capabilities,
-                    stream=effective_stream,
-                    emit=emit,
-                    stats=stats,
-                )
-        finally:
+
+        def plan(scale: float):
+            decided = chunking_decision(
+                document.content,
+                capabilities=capabilities,
+                settings=self.config.chunking,
+                max_output_tokens=max_output_tokens,
+                profile=profile,
+                config_context_length=self.config.engine.context_length,
+                explicit_unit=opts.chunk_strategy or self.config.defaults.chunk_strategy,
+                strict=opts.strict,
+                context_file_tokens=context_file_tokens,
+                max_chunks=self.config.chunking.max_chunks,
+                context_scale=scale,
+            )
+            strategy = choose_strategy(decided)
+            pieces = chunk_document(
+                document.content,
+                decision=decided,
+                settings=self.config.chunking,
+                source=document.source,
+            )
+            return decided, strategy, document.annotate_chunks(pieces)
+
+        # A backend may refuse a request the estimator thought fit (a denser
+        # tokenizer, a per-model template). Retry with a smaller budget, but
+        # never under --strict, and only when the new plan actually produces
+        # smaller chunks -- otherwise retrying would repeat the same request.
+        context_scale = 1.0
+        overflow_attempts = 0
+        while True:
+            decision, aggregation, chunks = plan(context_scale)
+            boundary: str | None = None
+            self._check_cancelled()
+
+            self.diag.progress(decision.describe())
+            if self.diag.verbose and decision.budget is not None:
+                self.diag.verbose_message(f"budget: {decision.budget.describe()}")
+
+            stats: dict[str, Any] = {
+                "input_bytes": document.size,
+                "input_chars": document.char_count,
+                "input_tokens_est": document.token_estimate,
+                "chunks": len(chunks),
+                "strategy": aggregation.name,
+                "concurrency": self.config.chunking.concurrency,
+            }
+            if context_scale != 1.0:
+                stats["context_scale"] = round(context_scale, 3)
             if reporter is not None:
-                reporter.finish()
+                reporter.start(label=label, model=engine.model, total_chunks=len(chunks))
+            generation_started = time.monotonic()
+            try:
+                if decision.single_shot:
+                    prompt = self._build_single_prompt(profile, chunks[0].text, opts, context)
+                    boundary = prompt.boundary
+                    summary, text = self._execute_single(
+                        prompt=prompt,
+                        engine=engine,
+                        capabilities=capabilities,
+                        fmt=opts.output_format,
+                        stream=effective_stream,
+                        emit=emit,
+                    )
+                    stats["generation_seconds"] = round(time.monotonic() - generation_started, 3)
+                else:
+                    summary, text, boundary = self._execute_map_reduce(
+                        chunks=chunks,
+                        document=document,
+                        decision=decision,
+                        profile=profile,
+                        context=context,
+                        opts=opts,
+                        engine=engine,
+                        capabilities=capabilities,
+                        stream=effective_stream,
+                        emit=emit,
+                        stats=stats,
+                        context_scale=context_scale,
+                    )
+                break
+            except ContextOverflow as overflow:
+                if opts.strict or overflow_attempts >= _MAX_OVERFLOW_RETRIES:
+                    raise
+                next_scale = context_scale * _CONTEXT_RETRY_SCALE
+                try:
+                    probe, _, _ = plan(next_scale)
+                except InputError:
+                    raise overflow
+                if decision.single_shot:
+                    progress_made = not probe.single_shot
+                else:
+                    progress_made = probe.max_chunk < decision.max_chunk
+                if not progress_made:
+                    raise overflow
+                overflow_attempts += 1
+                context_scale = next_scale
+                self.diag.warn(
+                    "backend reported a context overflow; retrying with a "
+                    "smaller chunk budget"
+                )
+                continue
+            finally:
+                if reporter is not None:
+                    reporter.finish()
 
         self._check_cancelled()
         warnings = self.diag.take_warnings()
@@ -597,6 +640,7 @@ class Pipeline:
         emit: Callable[[str], None] | None,
         stream: bool | None = None,
         stats: dict[str, Any] | None = None,
+        context_scale: float = 1.0,
     ) -> tuple[Any, str, str]:
         effective_stream = opts.stream if stream is None else stream
         stats = stats if stats is not None else {}
@@ -664,6 +708,7 @@ class Pipeline:
             reduce_profile,
             max_output_tokens=getattr(engine, "max_tokens", self.config.engine.max_tokens),
             config_context_length=self.config.engine.context_length,
+            context_scale=context_scale,
         ).usable_input_tokens
         summaries = mr.consolidate(
             summaries,

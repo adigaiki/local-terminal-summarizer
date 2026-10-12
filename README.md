@@ -405,6 +405,10 @@ Ollama but are untested here.
   `--ocr`; confirm with `summarize doctor`.
 - **`summarize` hangs / times out** — lower `[engine] timeout_seconds` or pass
   `--timeout`; a CPU-bound model can exceed the 60 s default on long inputs.
+- **`exceeds the model's context window`** — the token estimator under-counted
+  for your tokenizer. The tool retries with smaller chunks automatically; if it
+  still fails, raise the model's context window, lower `[engine] max_tokens`,
+  or set `[chunking] token_safety_margin` above 1.0.
 - **`appears to be binary`** — the file is not text (or a PDF without a
   `.pdf` extension); convert it or rename it to `*.pdf`.
 - **No input / TTY** — `summarize` with no argument and a TTY stdin errors
