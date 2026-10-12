@@ -10,6 +10,7 @@ from summarizer.aggregation.mapreduce import MapReduce, plan_reduce_groups
 from summarizer.chunking import compute_input_budget, chunking_decision, estimate_tokens
 from summarizer.chunking.splitter import split_document
 from summarizer.config import ChunkingSettings, EngineSettings
+from summarizer.engine.capabilities import CONTEXT_SOURCE_TRAINED
 from summarizer.engine.ollama import OllamaEngine
 from summarizer.errors import InputError, MalformedResponse
 from summarizer.log import Diagnostics
@@ -41,7 +42,8 @@ def test_capability_discovery_is_cached():
     http = HTTP()
     engine = OllamaEngine(EngineSettings(), http=http)
     assert engine.capabilities().context_length == 12345
-    assert engine.capabilities().context_source == 'server'
+    # A model_info value is the trained maximum, not the served window.
+    assert engine.capabilities().context_source == CONTEXT_SOURCE_TRAINED
     assert http.calls == 1
 
 
@@ -70,7 +72,9 @@ def test_ps_without_loaded_model_falls_back_to_show():
     engine = OllamaEngine(EngineSettings(model='qwen3:8b'), http=HTTP())
     caps = engine.capabilities()
     assert caps.context_length == 40960
-    assert caps.context_source == 'server'
+    # Without /api/ps only the trained maximum is known; a run warms the model
+    # up (engine.prepare()) to learn the served window.
+    assert caps.context_source == CONTEXT_SOURCE_TRAINED
 
 
 def test_pure_budget_subtracts_all_reservations():

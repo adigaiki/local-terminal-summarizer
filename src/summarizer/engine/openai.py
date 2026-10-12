@@ -14,7 +14,7 @@ from summarizer.engine.backends import BackendSpec
 from summarizer.engine.base import Engine
 from summarizer.engine.capabilities import EngineCapabilities
 from summarizer.engine.client import HttpClient, HttpStatusError, HttpStatusErrorKinds
-from summarizer.errors import ContextOverflow, EngineError, MalformedResponse, ModelNotFound
+from summarizer.errors import ContextOverflow, EngineError, MalformedResponse, ModelNotFound, TruncationDetected
 from summarizer.chunking.token import estimate_tokens
 from summarizer.log import Diagnostics
 from summarizer.config import EngineSettings
@@ -25,6 +25,26 @@ CHAT_PATH = "/v1/chat/completions"
 MODELS_PATH = "/v1/models"
 
 _RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
+
+# Truncation detection thresholds, chosen from measured Ollama behaviour. The
+# token estimator runs ~20-25% high on ordinary prose, so a fully processed
+# prompt reports ~0.80-0.85 of our estimate; a silently truncated prompt
+# reported 0.20-0.31. 0.6 sits safely between the two.
+_TRUNCATION_LOW_RATIO = 0.6
+# Also catch the case where the server stopped exactly at the window while we
+# estimated more (a denser tokenizer than the estimate).
+_TRUNCATION_NEAR_WINDOW = 0.9
+
+
+def _truncation_reason(*, est: int, reported: int, window: int | None) -> str | None:
+    if est <= 0 or reported <= 0:
+        return None
+    ratio = reported / est
+    if ratio < _TRUNCATION_LOW_RATIO:
+        return f"only {ratio:.0%} of the estimated prompt tokens"
+    if window and reported >= window * _TRUNCATION_NEAR_WINDOW and est > reported * 1.1:
+        return f"prompt tokens at the {window}-token window while the estimate was larger"
+    return None
 
 
 def _endpoint_v1(base_path: str, path: str) -> str:
@@ -70,6 +90,18 @@ class OpenAICompatEngine(Engine):
         )
         self._capabilities: EngineCapabilities | None = None
         self._config_context_length = int(settings.context_length or 0)
+        # Truncation handling: "raise" (non-streaming, so the pipeline can
+        # retry with smaller chunks) or "warn" (the run accepts a truncated
+        # result and records it).
+        self.truncation_action = "raise"
+        self.last_truncation: str | None = None
+        # Only backends whose usage counts are trustworthy are checked; a
+        # generic OpenAI-compatible server may report counts the estimator
+        # cannot be compared against. Tests may override this directly.
+        self.detect_truncation = bool(getattr(spec, "usage_reporting", False))
+
+    def set_truncation_action(self, action: str) -> None:
+        self.truncation_action = action
 
     def _chat_path(self) -> str:
         return _endpoint_v1(self._http.base_path, CHAT_PATH)
@@ -126,6 +158,10 @@ class OpenAICompatEngine(Engine):
             payload["temperature"] = temperature
         if json_object:
             payload["response_format"] = {"type": "json_object"}
+        if stream and self.spec is not None and getattr(self.spec, "stream_usage", False):
+            # Ask for a final usage chunk so truncation can be detected while
+            # streaming too. Only backends that declare support receive it.
+            payload["stream_options"] = {"include_usage": True}
         return payload
 
     def _reasoning_control_capability(self) -> bool | None:
@@ -138,6 +174,45 @@ class OpenAICompatEngine(Engine):
         if self.spec is not None:
             return self.spec.reasoning_control
         return None
+
+    def _check_truncation(self, prompt: str, *, streaming: bool) -> None:
+        """Detect a silently truncated prompt from the server's own counts.
+
+        Compares the server-reported prompt tokens against our pre-send
+        estimate and the planned window. A clear shortfall raises
+        :class:`TruncationDetected` so the pipeline retries with smaller
+        chunks -- except while streaming, where output has already been
+        emitted, so it warns and records the truncation instead. With
+        ``truncation_action == "warn"`` it always warns (the run accepts the
+        result).
+        """
+        usage = self.last_usage
+        if not self.detect_truncation or not usage:
+            return
+        reported = usage.get("prompt_tokens")
+        if not isinstance(reported, int) or reported <= 0:
+            return
+        est = estimate_tokens(prompt)
+        window = self._capabilities.context_length if self._capabilities else None
+        reason = _truncation_reason(est=est, reported=reported, window=window)
+        if reason is None:
+            self.last_truncation = None  # a clean call clears a stale flag
+            return
+        self.last_truncation = reason
+        message = (
+            f"the backend processed {reported} prompt tokens for a prompt of "
+            f"~{est} estimated tokens ({reason}); the prompt was likely "
+            "truncated and the summary may be missing the beginning of the "
+            "document"
+        )
+        hint = (
+            "lower `[chunking] max_tokens_per_chunk`, raise the model's context "
+            "window, or set `[engine] context_length`"
+        )
+        if not streaming and self.truncation_action == "raise":
+            raise TruncationDetected(message, hint=hint)
+        if self._diag:
+            self._diag.warn(message)
 
     def _extract_text(self, data: dict[str, Any]) -> str | None:
         choices = data.get("choices")
@@ -231,6 +306,7 @@ class OpenAICompatEngine(Engine):
                     hint="the endpoint may not be an OpenAI-compatible chat API",
                 )
             self.last_usage = self._extract_usage(data)
+            self._check_truncation(prompt, streaming=False)
             return text
 
         return self._run_with_retries("generation", _call)
@@ -249,9 +325,13 @@ class OpenAICompatEngine(Engine):
             for event in self._http.stream_sse(self._chat_path(), payload):
                 if not isinstance(event, dict):
                     continue
+                usage = self._extract_usage(event)
+                if usage:
+                    self.last_usage = usage
                 delta = self._extract_stream_delta(event)
                 if delta:
                     yield delta
+            self._check_truncation(prompt, streaming=True)
         except HttpStatusError as exc:
             raise self._classify_status_error(exc) from exc
 

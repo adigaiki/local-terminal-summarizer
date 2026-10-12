@@ -25,6 +25,7 @@ __all__ = [
     "EngineConnectionFailure",
     "CapabilityNotSupported",
     "ContextOverflow",
+    "TruncationDetected",
     "Interrupted",
 ]
 
@@ -100,6 +101,16 @@ class ContextOverflow(EngineError):
     Raised from a server 400/413 that names a context/length problem, or from
     the client-side pre-flight assertion. The pipeline may retry with a
     smaller chunk budget; under ``--strict`` it is a hard failure.
+    """
+
+
+class TruncationDetected(ContextOverflow):
+    """The backend processed fewer prompt tokens than were sent.
+
+    A subtype of :class:`ContextOverflow` so the pipeline's bounded
+    retry-with-smaller-chunks path is reused. The backend did not refuse the
+    request, so after the retries are exhausted the run may continue with a
+    loud warning (exit 0) instead of failing, unless ``--strict`` is set.
     """
 
 

@@ -60,6 +60,14 @@ class BackendSpec:
     structured_json: bool | None = None
     model_listing: bool = True
     reasoning_control: bool | None = None
+    # Whether the streamed OpenAI-compatible response includes a final usage
+    # chunk when asked (``stream_options.include_usage``). False/None means do
+    # not ask; streaming then carries no token counts for truncation checks.
+    stream_usage: bool = False
+    # Whether the backend's reported prompt-token counts are trustworthy enough
+    # to detect prompt truncation. Generic OpenAI-compatible servers vary, so
+    # only adapters that declare this (Ollama today) get the check.
+    usage_reporting: bool = False
 
 
 BACKEND_SPECS: tuple[BackendSpec, ...] = (
@@ -71,6 +79,8 @@ BACKEND_SPECS: tuple[BackendSpec, ...] = (
         default_endpoint="http://localhost:11434",
         structured_json=None,
         reasoning_control=True,
+        stream_usage=True,
+        usage_reporting=True,
     ),
     BackendSpec(
         name="openai-compatible",

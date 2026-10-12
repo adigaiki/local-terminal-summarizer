@@ -35,6 +35,17 @@ it is, "released" means a git tag. Design notes and rationale live in
   (which poisoned the socket on the first stall).
 - **Platform support:** CI now runs the full suite on macOS
   (`macos-latest`) as well as Linux; the README platform note says so.
+- **Context window:** a run warms an unloaded Ollama model once and re-reads
+  the *served* window from `/api/ps` before planning, instead of trusting the
+  trained maximum from `/api/show` (which can be far larger, and led Ollama to
+  silently drop the beginning of a document). If the warm-up fails it plans
+  against a conservative cap and warns. `doctor` reports the trained maximum
+  with a `!` line and points at `ollama ps`.
+- **Silent truncation is detected:** for backends that report prompt tokens
+  (Ollama), a clear shortfall against the estimate — or a stop at the window —
+  is treated as a context overflow and retried with smaller chunks; after the
+  retries the run warns, sets `truncated: true` in the JSON envelope, and exits
+  0 (or fails under `--strict`).
 
 ## v0.6.0 — 2026-09-21
 

@@ -15,7 +15,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from summarizer.engine.client import HttpClient
-from summarizer.errors import EngineTimeout
+from summarizer.cancel import CancelToken
+from summarizer.errors import EngineTimeout, Interrupted
 
 _EVENT = b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n'
 
@@ -82,6 +83,35 @@ def test_stall_after_the_first_byte_times_out_at_the_idle_deadline():
         assert next(iter(events))  # the first event arrives
         with pytest.raises(EngineTimeout, match="after the first token"):
             list(events)
+    finally:
+        server.shutdown()
+
+
+def test_cancelling_a_stream_does_not_leak_the_reader_thread():
+    """Cancelling closes the socket so the reader thread cannot leak."""
+    server = _server("stall_after")
+    try:
+        client = _client(server, timeout=10.0, first_token_timeout=10.0)
+        token = CancelToken()
+        client.cancel = token
+        events = client.stream_sse("/v1/chat/completions", {"model": "m"})
+        assert next(iter(events))  # server sends one event then goes silent
+
+        timer = threading.Timer(0.2, token.cancel)
+        timer.start()
+        try:
+            with pytest.raises(Interrupted):
+                for _ in events:
+                    pass
+        finally:
+            timer.cancel()
+
+        # The stream_sse finally joins the reader; none may remain alive.
+        leaked = [
+            t for t in threading.enumerate()
+            if t.name == "summarize-stream" and t.is_alive()
+        ]
+        assert leaked == []
     finally:
         server.shutdown()
 

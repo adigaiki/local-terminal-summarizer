@@ -21,7 +21,10 @@ from summarizer.config import EngineSettings
 from summarizer.engine.backends import BackendSpec, resolve_backend_spec
 from summarizer.engine.capabilities import (
     CONTEXT_SOURCE_CONFIG,
+    CONTEXT_SOURCE_FALLBACK,
     CONTEXT_SOURCE_SERVER,
+    CONTEXT_SOURCE_TRAINED,
+    DEFAULT_CONTEXT_LENGTH,
     EngineCapabilities,
 )
 from summarizer.engine.client import HttpClient
@@ -34,6 +37,7 @@ __all__ = ["OllamaEngine"]
 TAGS_PATH = "/api/tags"
 SHOW_PATH = "/api/show"
 PS_PATH = "/api/ps"
+GENERATE_PATH = "/api/generate"
 
 # Keys Ollama uses for the trained context window inside /api/show model_info.
 _CONTEXT_KEY_SUFFIXES = (".context_length", "context_length")
@@ -101,10 +105,16 @@ class OllamaEngine(OpenAICompatEngine):
         return value if value > 0 else None
 
     @staticmethod
-    def _context_from_show(info: Any) -> tuple[int | None, str | None]:
-        """Extract a context length from an /api/show response."""
+    def _context_from_show(info: Any) -> tuple[int | None, str | None, str | None]:
+        """Extract a context length from an /api/show response.
+
+        Returns ``(length, source, detail)``. A ``parameters.num_ctx`` is the
+        model's own configured serving window; a ``model_info`` value is only
+        the *trained maximum*, which the server may serve far below, so it gets
+        :data:`CONTEXT_SOURCE_TRAINED` rather than ``server``.
+        """
         if not isinstance(info, dict):
-            return None, None
+            return None, None, None
         params = info.get("parameters")
         if isinstance(params, str):
             match = re.search(r"(?m)^\s*num_ctx\s+(\d+)\s*$", params)
@@ -112,14 +122,18 @@ class OllamaEngine(OpenAICompatEngine):
         if isinstance(params, dict):
             num_ctx = params.get("num_ctx")
             if type(num_ctx) is int and num_ctx > 0:
-                return num_ctx, f"{SHOW_PATH} (parameters.num_ctx)"
+                return num_ctx, CONTEXT_SOURCE_SERVER, f"{SHOW_PATH} (parameters.num_ctx)"
         model_info = info.get("model_info")
         if isinstance(model_info, dict):
             for suffix in _CONTEXT_KEY_SUFFIXES:
                 for key, value in model_info.items():
                     if str(key).endswith(suffix) and type(value) is int and value > 0:
-                        return value, f"{SHOW_PATH} ({key}; trained maximum, verify server num_ctx)"
-        return None, None
+                        return (
+                            value,
+                            CONTEXT_SOURCE_TRAINED,
+                            f"{SHOW_PATH} ({key}; trained maximum, model not loaded)",
+                        )
+        return None, None, None
 
     def _context_from_tags(self) -> tuple[int | None, str | None]:
         """Fallback: per-model metadata already present in /api/tags."""
@@ -180,9 +194,9 @@ class OllamaEngine(OpenAICompatEngine):
                 SHOW_PATH, {"model": self.model},
                 timeout=min(self.timeout_seconds, 15),
             )
-            shown, detail = self._context_from_show(info)
+            shown, shown_source, detail = self._context_from_show(info)
             if shown:
-                return shown, CONTEXT_SOURCE_SERVER, f"context discovered via {detail}"
+                return shown, (shown_source or CONTEXT_SOURCE_SERVER), f"context discovered via {detail}"
             note = f"{SHOW_PATH} reported no context length for {self.model!r}"
         except Exception as exc:  # unreachable model, older server, bad reply
             note = f"{SHOW_PATH} unavailable ({type(exc).__name__}); context unknown"
@@ -208,3 +222,67 @@ class OllamaEngine(OpenAICompatEngine):
                 caps = caps.with_notes(note)
             self._capabilities = caps
         return self._capabilities
+
+    def prepare(self) -> None:
+        """Warm the model up so the *served* window can be read before planning.
+
+        Ollama serves a window that can be far below the model's trained
+        maximum, and it only appears in ``/api/ps`` once the model is loaded.
+        When discovery has only the trained maximum (or nothing), send one tiny
+        request to load the model, then re-read ``/api/ps``. If that fails,
+        fall back to a conservative cap instead of the trained maximum, so an
+        oversized single-shot prompt is never planned. ``[engine]
+        context_length`` always wins. ``doctor`` never calls this.
+        """
+        if self._config_context_length:
+            return
+        caps = self.capabilities()
+        if caps.context_source not in (CONTEXT_SOURCE_TRAINED, None):
+            return  # already a real served window (or explicitly configured)
+
+        warmed = False
+        try:
+            self._http.post_json(
+                GENERATE_PATH,
+                {
+                    "model": self.model,
+                    "prompt": "",
+                    "stream": False,
+                    "options": {"num_predict": 1},
+                },
+                timeout=self.timeout_seconds,
+            )
+            warmed = True
+        except Exception as exc:
+            if self._diag:
+                self._diag.verbose_warn(
+                    f"model warm-up failed ({type(exc).__name__}: {exc})"
+                )
+
+        loaded, ps_note = self._context_from_ps()
+        if loaded:
+            self._capabilities = caps.with_context_length(
+                loaded, source=CONTEXT_SOURCE_SERVER
+            ).with_notes(f"context discovered via {ps_note}")
+            return
+
+        conservative = min(
+            caps.context_length or DEFAULT_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+        )
+        self._capabilities = EngineCapabilities(
+            backend=self.backend,
+            streaming=True,
+            structured_json=None,
+            reasoning_control=True,
+            model_listing=True,
+            context_length=conservative,
+            context_source=CONTEXT_SOURCE_FALLBACK,
+        )
+        if self._diag:
+            self._diag.warn(
+                f"could not read the served context window for {self.model!r} "
+                f"(warm-up {'failed' if not warmed else 'did not load it'}); "
+                f"planning against a conservative {conservative}-token cap instead "
+                "of the trained maximum. Set `[engine] context_length` or check "
+                "`ollama ps`."
+            )

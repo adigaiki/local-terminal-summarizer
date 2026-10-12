@@ -21,6 +21,7 @@ __all__ = [
     "DEFAULT_CONTEXT_LENGTH",
     "CONTEXT_SOURCE_CONFIG",
     "CONTEXT_SOURCE_SERVER",
+    "CONTEXT_SOURCE_TRAINED",
     "CONTEXT_SOURCE_FALLBACK",
 ]
 
@@ -31,7 +32,11 @@ DEFAULT_CONTEXT_LENGTH = 8192
 
 # Provenance tags for a context length.
 CONTEXT_SOURCE_CONFIG = "config"  # explicit [engine] context_length
-CONTEXT_SOURCE_SERVER = "server"  # discovered from the local server's API
+CONTEXT_SOURCE_SERVER = "server"  # discovered from the loaded model's API
+# The model's *trained maximum*, learned while the model is not loaded. The
+# serving window may be much smaller (Ollama defaults well below the trained
+# maximum), so this is a weak signal, not a usable window.
+CONTEXT_SOURCE_TRAINED = "server-trained-max"
 CONTEXT_SOURCE_FALLBACK = "fallback"  # DEFAULT_CONTEXT_LENGTH was assumed
 
 

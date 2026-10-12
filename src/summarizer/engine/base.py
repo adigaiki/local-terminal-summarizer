@@ -99,3 +99,13 @@ class Engine(ABC):
         can interrupt in-flight work (HTTP reads/streams) override it.
         """
         return None
+
+    def prepare(self) -> None:
+        """Optional hook: do any per-run setup before the plan is computed.
+
+        The base implementation does nothing. An adapter that can only learn
+        its real serving window *after* the model is loaded may warm the model
+        up here and refresh its capabilities. ``doctor`` never calls this, so
+        diagnostics stay side-effect free.
+        """
+        return None

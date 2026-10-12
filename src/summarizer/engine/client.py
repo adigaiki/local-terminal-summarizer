@@ -341,6 +341,15 @@ class HttpClient:
                             yield parsed
             finally:
                 stop.set()
+                # Wake the blocked reader by shutting the socket down; closing
+                # the buffered response would block on the lock the reader
+                # holds inside its blocked read.
+                sock = _response_socket(conn, resp)
+                if sock is not None:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
                 try:
                     conn.close()
                 except Exception:  # pragma: no cover - close is best-effort

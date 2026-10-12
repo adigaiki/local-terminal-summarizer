@@ -71,3 +71,5 @@ and that gap is worth more than another milestone.
 ## Deferred
 
 GUI, URL fetching, cloud models, agents, tool execution, embeddings/vector databases, self-update, background services, automatic model installation, multi-model ensemble/routing, and refine-based aggregation. These remain out of scope until a concrete need appears.
+
+Also deferred: forwarding an explicit `num_ctx` to the native Ollama endpoint (an opt-in, per-run served-window override) as an alternative to the warm-up-and-read approach. It is not sent today; the warm-up path learns the served window without changing server options.

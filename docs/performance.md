@@ -49,6 +49,29 @@ timeout_seconds = 60             # connect + non-streaming total + streaming idl
 first_token_timeout_seconds = 600  # streaming: wait for the first byte
 ```
 
+## Context window discovery and prompt truncation
+
+Two failure modes with a local server are handled explicitly:
+
+- **Discovery can happen before the model is loaded.** Ollama reports a
+  model's *trained maximum* (`/api/show`) when it is not loaded, but serves a
+  smaller window (`/api/ps`, the `ollama ps` `CONTEXT` column) once it is. A
+  run therefore warms the model with one tiny request and re-reads `/api/ps`
+  before planning; if that fails it plans against a conservative cap, not the
+  trained maximum, and says so. `[engine] context_length` always wins.
+  `doctor` never warms up — it reports the trained maximum with a `!` line and
+  points at `ollama ps`.
+- **A prompt can be silently truncated.** If a backend processes fewer prompt
+  tokens than were sent, the summary may be missing the document's beginning.
+  For backends whose usage counts are trustworthy (Ollama), the tool compares
+  the server-reported prompt tokens against its estimate and, on a clear
+  shortfall or a stop at the window, treats it as a context overflow and
+  retries with smaller chunks. After the bounded retries it warns loudly, sets
+  `truncated: true` in the JSON envelope, and still exits 0 — unless
+  `--strict`, which fails. Detection is skipped for generic OpenAI-compatible
+  backends (`usage_reporting = false`) whose counts vary, and while streaming it
+  warns rather than retries, because the text has already been emitted.
+
 ## Bounded concurrency
 
 Independent map chunks can run with bounded concurrency (default `1`, which is

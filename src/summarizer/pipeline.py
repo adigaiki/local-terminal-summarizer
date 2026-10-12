@@ -29,7 +29,7 @@ from summarizer.config import Config, EngineSettings, user_prompt_dir
 from summarizer.document import Document, read_source
 from summarizer.engine import Engine, EngineCapabilities, create_engine
 from summarizer.engine.capabilities import CONTEXT_SOURCE_CONFIG, DEFAULT_CONTEXT_LENGTH
-from summarizer.errors import ConfigError, ContextOverflow, InputError
+from summarizer.errors import ConfigError, ContextOverflow, InputError, TruncationDetected
 from summarizer.log import Diagnostics, redact_url
 from summarizer.net import is_loopback_url
 from summarizer.output import (
@@ -95,6 +95,9 @@ class PipelineResult:
     stats: dict[str, Any] = field(default_factory=dict)
     # Mechanical claim verification, when requested (never a model judge).
     verification: Any = None
+    # True when the backend reported processing fewer prompt tokens than were
+    # sent (a likely truncation); the summary may be incomplete.
+    truncated: bool = False
 
     @property
     def chunk_provenance(self) -> list[dict[str, Any]]:
@@ -324,6 +327,7 @@ class Pipeline:
         chunk_provenance: list[dict[str, Any]] | None = None,
         stats: dict[str, Any] | None = None,
         verification: dict[str, Any] | None = None,
+        truncated: bool = False,
     ) -> str:
         envelope = build_json_envelope(
             summary,
@@ -343,6 +347,8 @@ class Pipeline:
             envelope["stats"] = stats
         if verification is not None:
             envelope["verification"] = verification
+        if truncated:
+            envelope["truncated"] = True
         return dumps_json(envelope)
 
     # -- prompts ---------------------------------------------------------------
@@ -379,6 +385,10 @@ class Pipeline:
         if hasattr(engine, "set_cancel"):
             engine.set_cancel(self.cancel)
         max_output_tokens = getattr(engine, "max_tokens", self.config.engine.max_tokens)
+        # Give the engine a chance to learn its real serving window (Ollama can
+        # only report it once the model is loaded) before the plan is computed.
+        if hasattr(engine, "prepare"):
+            engine.prepare()
         capabilities = self._safe_capabilities(engine)
         context = self._read_context(opts.context_file)
         self._check_cancelled()
@@ -436,6 +446,7 @@ class Pipeline:
         # smaller chunks -- otherwise retrying would repeat the same request.
         context_scale = 1.0
         overflow_attempts = 0
+        truncation_accepted = False
         while True:
             decision, aggregation, chunks = plan(context_scale)
             boundary: str | None = None
@@ -488,7 +499,21 @@ class Pipeline:
                     )
                 break
             except ContextOverflow as overflow:
-                if opts.strict or overflow_attempts >= _MAX_OVERFLOW_RETRIES:
+                if opts.strict:
+                    raise
+                if overflow_attempts >= _MAX_OVERFLOW_RETRIES:
+                    # A *detected truncation* is not a refusal: the backend
+                    # answered, just with a shortened prompt. Accept the result
+                    # with a loud, machine-readable flag rather than failing.
+                    if isinstance(overflow, TruncationDetected) and not truncation_accepted:
+                        truncation_accepted = True
+                        if hasattr(engine, "set_truncation_action"):
+                            engine.set_truncation_action("warn")
+                        self.diag.warn(
+                            "the prompt was still truncated after retrying with "
+                            "smaller chunks; the summary may be incomplete"
+                        )
+                        continue
                     raise
                 next_scale = context_scale * _CONTEXT_RETRY_SCALE
                 try:
@@ -503,16 +528,23 @@ class Pipeline:
                     raise overflow
                 overflow_attempts += 1
                 context_scale = next_scale
-                self.diag.warn(
-                    "backend reported a context overflow; retrying with a "
-                    "smaller chunk budget"
-                )
+                if isinstance(overflow, TruncationDetected):
+                    self.diag.warn(
+                        "the backend processed fewer prompt tokens than were sent "
+                        "(likely truncation); retrying with a smaller chunk budget"
+                    )
+                else:
+                    self.diag.warn(
+                        "backend reported a context overflow; retrying with a "
+                        "smaller chunk budget"
+                    )
                 continue
             finally:
                 if reporter is not None:
                     reporter.finish()
 
         self._check_cancelled()
+        truncated = truncation_accepted or bool(getattr(engine, "last_truncation", None))
         warnings = self.diag.take_warnings()
         verification = None
         if opts.verify:
@@ -545,6 +577,7 @@ class Pipeline:
                 chunk_provenance=provenance,
                 stats=stats if opts.stats else None,
                 verification=verification.to_json() if verification is not None else None,
+                truncated=truncated,
             )
         else:
             text = self._format_text(text if isinstance(text, str) else str(text), opts.output_format)
@@ -563,6 +596,7 @@ class Pipeline:
             chunks=chunks if len(chunks) > 1 else [],
             stats=stats,
             verification=verification,
+            truncated=truncated,
         )
 
     # -- execution paths ------------------------------------------------------

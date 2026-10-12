@@ -25,7 +25,7 @@ from summarizer.config import (
     user_config_path,
 )
 from summarizer.engine import Engine, EngineCapabilities, create_engine
-from summarizer.engine.capabilities import DEFAULT_CONTEXT_LENGTH
+from summarizer.engine.capabilities import CONTEXT_SOURCE_TRAINED, DEFAULT_CONTEXT_LENGTH
 from summarizer.errors import EngineError, ModelNotFound, SummarizerError
 from summarizer.log import Diagnostics, redact_url
 from summarizer.net import is_loopback_url
@@ -358,6 +358,23 @@ def diagnose(
                 detail=[f"used for chunk sizing: ~{ctx} tokens"],
             )
         )
+        if capabilities.context_source == CONTEXT_SOURCE_TRAINED:
+            checks.append(
+                _check(
+                    "Serving context window",
+                    False,
+                    message=(
+                        "the reported window is the model's trained maximum; the "
+                        "server may serve less"
+                    ),
+                    hint=(
+                        "check `ollama ps` (CONTEXT column), or set "
+                        "`[engine] context_length`; a normal run warms the model "
+                        "up and re-reads the served window"
+                    ),
+                    optional=True,
+                )
+            )
         json_state = (
             "reported by backend"
             if capabilities.supports_structured_output is True
