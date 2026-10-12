@@ -66,10 +66,9 @@ missing. It is one small tool, not a chat client.
   fits in GPU memory it is fast (tens of tokens/second); if it spills to CPU
   it still works but can drop to ~1 token/second. `ollama ps` shows the
   CPU/GPU split and the serving context window.
-- **Platforms:** developed and tested on **Linux**, the only platform declared
-  in the packaging metadata. The code uses only POSIX APIs (`flock`, signals),
-  so **macOS and WSL are expected to work but are not covered by CI**. Native
-  Windows is unsupported.
+- **Platforms:** tested in CI on **Linux** and **macOS** (both run the full
+  suite); WSL is expected to work. The code uses only POSIX APIs (`flock`,
+  signals). Native Windows is unsupported.
 
 ## Install
 

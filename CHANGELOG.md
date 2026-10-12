@@ -33,6 +33,8 @@ it is, "released" means a git tag. Design notes and rationale live in
   timeout reset on every byte. Non-streaming keeps the total `timeout_seconds`
   deadline. The stream transport no longer polls with socket read timeouts
   (which poisoned the socket on the first stall).
+- **Platform support:** CI now runs the full suite on macOS
+  (`macos-latest`) as well as Linux; the README platform note says so.
 
 ## v0.6.0 — 2026-09-21
 
