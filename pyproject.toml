@@ -3,7 +3,10 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "summarizer"
+# PyPI distribution name. The import package stays `summarizer` and the console
+# command stays `summarize`; an unrelated project already owns `summarizer` on
+# PyPI, so the distribution is named after the repository.
+name = "local-terminal-summarizer"
 # Single source of truth: the version comes from summarizer.__version__.
 dynamic = ["version"]
 description = "A local-first, Unix-native terminal summarizer for local LLM servers."

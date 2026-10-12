@@ -24,6 +24,9 @@ it is, "released" means a git tag. Design notes and rationale live in
   (exit 3) unless you opt in with `[engine] allow_non_loopback = true` (or
   `SUMMARIZER_ALLOW_NON_LOOPBACK=1`); `doctor` and `--dry-run` warn instead of
   refusing.
+- **Packaging:** the distribution is named `local-terminal-summarizer` (the
+  import package stays `summarizer`, the command stays `summarize`), because an
+  unrelated project owns `summarizer` on PyPI. Not published yet.
 
 ## v0.6.0 — 2026-09-21
 

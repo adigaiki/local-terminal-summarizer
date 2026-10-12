@@ -73,7 +73,8 @@ missing. It is one small tool, not a chat client.
 
 ## Install
 
-Not on PyPI yet. Install from a checkout with
+Not on PyPI yet (planned distribution name: `local-terminal-summarizer`).
+Install from a checkout with
 [pipx](https://pipx.pypa.io/) (isolated, puts `summarize` on your `PATH`):
 
 ```sh
@@ -101,7 +102,7 @@ pipx install '.[ocr]'     # OCR: adds pytesseract + pdf2image; also needs the
 Uninstall:
 
 ```sh
-pipx uninstall summarizer   # or: uv tool uninstall summarizer
+pipx uninstall local-terminal-summarizer   # or: uv tool uninstall local-terminal-summarizer
 ```
 
 Releases, packaging, and the published wheel are described in

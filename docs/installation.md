@@ -4,6 +4,19 @@
 
 The project is not published to PyPI. Install it from a checkout.
 
+The **planned** distribution name is `local-terminal-summarizer`. Three names
+are deliberately different:
+
+| Thing | Name |
+| --- | --- |
+| PyPI distribution | `local-terminal-summarizer` |
+| Python import package | `summarizer` |
+| Console command | `summarize` |
+
+An unrelated project already owns the name `summarizer` on PyPI, so
+`pip install summarizer` installs **that** project, not this one. Once this is
+published, always install by `local-terminal-summarizer`.
+
 ## Recommended: pipx
 
 [pipx](https://pipx.pypa.io/) isolates the package and puts `summarize` on
@@ -15,9 +28,11 @@ cd local-terminal-summarizer
 pipx install .
 ```
 
-Upgrade later with `pipx upgrade summarizer` after pulling a new checkout.
-There is no self-update mechanism and the running tool never downloads
-anything.
+Upgrade later with `pipx upgrade local-terminal-summarizer` after pulling a
+new checkout. There is no self-update mechanism and the running tool never
+downloads anything. Uninstall with
+`pipx uninstall local-terminal-summarizer` (or
+`uv tool uninstall local-terminal-summarizer`).
 
 ## Virtualenv
 
@@ -30,8 +45,8 @@ python3 -m venv .venv
 ## Optional extras
 
 ```sh
-pip install 'summarizer[pdf]'   # PDF text extraction (pypdf + fonttools, both BSD-3-Clause)
-pip install 'summarizer[ocr]'   # OCR: adds pytesseract + pdf2image
+pip install 'local-terminal-summarizer[pdf]'   # PDF text extraction (pypdf + fonttools, both BSD-3-Clause)
+pip install 'local-terminal-summarizer[ocr]'   # OCR: adds pytesseract + pdf2image
 ```
 
 The base install has no runtime dependencies beyond Python itself. OCR additionally needs the
@@ -52,11 +67,21 @@ GitHub release. The build job needs no Ollama server, GPU, or model.
 
 ## Publishing to PyPI
 
-The package is PyPI-ready but has not been published. To publish a release:
+The package is PyPI-ready but has not been published. **TestPyPI first**, then
+PyPI. Nothing is uploaded automatically; these are manual steps.
 
 ```sh
 python -m build --no-isolation
 python -m twine check dist/*
+
+# 1. TestPyPI (test.pypi.org only)
+python -m twine upload --repository testpypi dist/*
+python -m venv /tmp/ttp && /tmp/ttp/bin/pip install \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ local-terminal-summarizer
+/tmp/ttp/bin/summarize --version
+
+# 2. PyPI (only after step 1 is verified)
 python -m twine upload dist/*
 ```
 

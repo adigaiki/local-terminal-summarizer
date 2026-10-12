@@ -20,8 +20,8 @@ rather than summarized as mojibake.
 ## Optional dependencies
 
 ```sh
-pip install 'summarizer[pdf]'   # PDF text extraction (pypdf + fonttools, both BSD-3-Clause)
-pip install 'summarizer[ocr]'   # OCR: adds pytesseract + pdf2image
+pip install 'local-terminal-summarizer[pdf]'   # PDF text extraction (pypdf + fonttools, both BSD-3-Clause)
+pip install 'local-terminal-summarizer[ocr]'   # OCR: adds pytesseract + pdf2image
 ```
 
 PDF reading is entirely local: nothing is downloaded and no PDF metadata is

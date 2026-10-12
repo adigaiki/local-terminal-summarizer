@@ -19,8 +19,10 @@ def _pyproject() -> dict:
 
 
 def test_installed_metadata_matches_the_module_version():
-    # The editable install must agree with the single source of truth.
-    assert importlib.metadata.version("summarizer") == summarizer.__version__
+    # The editable install must agree with the single source of truth. The
+    # distribution is local-terminal-summarizer; the import package is
+    # summarizer and the command is summarize.
+    assert importlib.metadata.version("local-terminal-summarizer") == summarizer.__version__
 
 
 def test_version_flag_prints_the_module_version(capsys):
