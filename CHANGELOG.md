@@ -4,7 +4,7 @@ Notable changes per release. The project is pre-1.0 and not yet on PyPI; until
 it is, "released" means a git tag. Design notes and rationale live in
 [ROADMAP.md](ROADMAP.md).
 
-## Unreleased
+## v0.7.0 — 2026-10-13
 
 - **Structured PDF tables** (`[input] structure_tables`, on by default):
   simple extracted tables are rewritten so every value carries its own label,
