@@ -210,7 +210,7 @@ class OpenAICompatEngine(Engine):
             "window, or set `[engine] context_length`"
         )
         if not streaming and self.truncation_action == "raise":
-            raise TruncationDetected(message, hint=hint)
+            raise TruncationDetected(message, hint=hint, ratio=reported / est)
         if self._diag:
             self._diag.warn(message)
 

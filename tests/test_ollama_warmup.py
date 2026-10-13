@@ -8,10 +8,9 @@ from summarizer.engine.capabilities import (
     CONTEXT_SOURCE_FALLBACK,
     CONTEXT_SOURCE_SERVER,
     CONTEXT_SOURCE_TRAINED,
-    DEFAULT_CONTEXT_LENGTH,
     EngineCapabilities,
 )
-from summarizer.engine.ollama import OllamaEngine
+from summarizer.engine.ollama import OLLAMA_CONSERVATIVE_CONTEXT_LENGTH, OllamaEngine
 from summarizer.log import Diagnostics
 
 
@@ -70,7 +69,7 @@ def test_warmup_failure_falls_back_conservatively_with_a_warning():
     engine.prepare()
 
     caps = engine.capabilities()
-    assert caps.context_length == DEFAULT_CONTEXT_LENGTH  # not 32768
+    assert caps.context_length == OLLAMA_CONSERVATIVE_CONTEXT_LENGTH  # 4096, not 32768
     assert caps.context_source == CONTEXT_SOURCE_FALLBACK
 
 

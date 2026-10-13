@@ -111,7 +111,17 @@ class TruncationDetected(ContextOverflow):
     retry-with-smaller-chunks path is reused. The backend did not refuse the
     request, so after the retries are exhausted the run may continue with a
     loud warning (exit 0) instead of failing, unless ``--strict`` is set.
+
+    ``ratio`` is the observed ``reported / estimated`` prompt-token ratio for
+    the call that was truncated; the pipeline uses it to size the retry instead
+    of a fixed shrink factor, so a large under-estimate converges.
     """
+
+    def __init__(
+        self, message: str, *, hint: str | None = None, ratio: float | None = None
+    ) -> None:
+        super().__init__(message, hint=hint)
+        self.ratio = ratio
 
 
 class Interrupted(SummarizerError):

@@ -24,7 +24,6 @@ from summarizer.engine.capabilities import (
     CONTEXT_SOURCE_FALLBACK,
     CONTEXT_SOURCE_SERVER,
     CONTEXT_SOURCE_TRAINED,
-    DEFAULT_CONTEXT_LENGTH,
     EngineCapabilities,
 )
 from summarizer.engine.client import HttpClient
@@ -38,6 +37,11 @@ TAGS_PATH = "/api/tags"
 SHOW_PATH = "/api/show"
 PS_PATH = "/api/ps"
 GENERATE_PATH = "/api/generate"
+
+# Conservative cap used when the served window cannot be read after a warm-up.
+# Deliberately small: Ollama's own default serving windows are 4096 on
+# constrained GPUs, and a larger guess is the oversize risk this guards against.
+OLLAMA_CONSERVATIVE_CONTEXT_LENGTH = 4096
 
 # Keys Ollama uses for the trained context window inside /api/show model_info.
 _CONTEXT_KEY_SUFFIXES = (".context_length", "context_length")
@@ -266,9 +270,7 @@ class OllamaEngine(OpenAICompatEngine):
             ).with_notes(f"context discovered via {ps_note}")
             return
 
-        conservative = min(
-            caps.context_length or DEFAULT_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
-        )
+        conservative = OLLAMA_CONSERVATIVE_CONTEXT_LENGTH
         self._capabilities = EngineCapabilities(
             backend=self.backend,
             streaming=True,
@@ -282,7 +284,8 @@ class OllamaEngine(OpenAICompatEngine):
             self._diag.warn(
                 f"could not read the served context window for {self.model!r} "
                 f"(warm-up {'failed' if not warmed else 'did not load it'}); "
-                f"planning against a conservative {conservative}-token cap instead "
-                "of the trained maximum. Set `[engine] context_length` or check "
-                "`ollama ps`."
+                f"planning against a conservative {conservative}-token cap, which "
+                "is a guess, not the trained maximum. Truncation detection is "
+                "weaker while the window is a guess. Set `[engine] context_length` "
+                "or check `ollama ps`."
             )

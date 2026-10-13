@@ -50,6 +50,24 @@ __all__ = ["Pipeline", "PipelineOptions", "PipelineResult", "DryRunReport"]
 # document budget each time. Bounded so a misconfigured window cannot loop.
 _MAX_OVERFLOW_RETRIES = 2
 _CONTEXT_RETRY_SCALE = 0.75
+# Floor so a pathological observed ratio cannot shrink the budget to nothing.
+_MIN_CONTEXT_SCALE = 0.1
+
+
+def _next_context_scale(current: float, ratio: float | None) -> float:
+    """Shrink the document budget for one retry.
+
+    When the backend reported an observable ``reported / estimated`` prompt
+    ratio, size the retry from it (with a small margin) so a large
+    under-estimate -- for example a non-Latin script where the estimator is
+    several times low -- converges in one step. Otherwise fall back to a fixed
+    factor. The result always strictly decreases so the loop makes progress.
+    """
+    if ratio is not None and 0.0 < ratio < 1.0:
+        target = current * ratio * 0.9
+    else:
+        target = current * _CONTEXT_RETRY_SCALE
+    return max(_MIN_CONTEXT_SCALE, min(target, current * 0.9))
 
 
 @dataclass(frozen=True)
@@ -515,7 +533,9 @@ class Pipeline:
                         )
                         continue
                     raise
-                next_scale = context_scale * _CONTEXT_RETRY_SCALE
+                next_scale = _next_context_scale(
+                    context_scale, getattr(overflow, "ratio", None)
+                )
                 try:
                     probe, _, _ = plan(next_scale)
                 except InputError:

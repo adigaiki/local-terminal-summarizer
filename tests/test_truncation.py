@@ -204,3 +204,32 @@ def test_dry_run_never_prepares_or_probes_the_backend(tmp_path):
     assert report.render()
     assert engine.prepared is False
     assert engine.caps_calls == 0
+
+
+class _UnderCount(_Engine):
+    """Under-counts ~3.6x: any prompt estimated over ~1100 tokens is truncated.
+
+    The estimator is 3.6x low, so the plan must shrink below ~0.28 of its
+    budget before the real prompt fits the window.
+    """
+
+    def generate(self, *, prompt, json_object=False, temperature=None) -> str:
+        self.calls += 1
+        if estimate_tokens(prompt) > 1100:
+            raise TruncationDetected("under-counted prompt", ratio=0.28)
+        return '"ok"' if json_object else "summary"
+
+
+def test_ratio_based_retry_converges_on_a_large_underestimate(tmp_path):
+    config = _config()
+    source = tmp_path / "doc.txt"
+    source.write_text(_single_shot_doc(config), encoding="utf-8")
+    engine = _UnderCount()
+
+    result = _run(engine, config, source)
+
+    assert result.truncated is False
+    assert result.aggregation.name == "mapreduce"
+    # One retry, sized from the observed 0.28 ratio (da * 0.9), not a fixed 0.75.
+    assert result.stats.get("context_scale") == pytest.approx(0.252, abs=0.01)
+    assert engine.calls <= 1 + 8
