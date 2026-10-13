@@ -33,7 +33,7 @@ def _import_pypdf():
     except ImportError as exc:
         raise InputError(
             "PDF support requires the optional dependency `pypdf`",
-            hint="install it with: pip install 'summarizer[pdf]'",
+            hint="install it with: pip install 'local-terminal-summarizer[pdf]'",
         ) from exc
     return PdfReader
 
@@ -115,7 +115,7 @@ def _ocr_pages(path: Path, page_count: int, *, diag: Diagnostics, options: dict)
         raise InputError(
             "OCR requires the optional dependencies `pytesseract` and "
             "`pdf2image` plus the local `pdftoppm` and `tesseract` binaries",
-            hint="install with: pip install 'summarizer[ocr]'",
+            hint="install with: pip install 'local-terminal-summarizer[ocr]'",
         ) from None
     for binary in ("pdftoppm", "pdfinfo", "tesseract"):
         if shutil.which(binary) is None:

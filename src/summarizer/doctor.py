@@ -96,7 +96,7 @@ def _reader_checks() -> list[Check]:
                 "PDF reader",
                 False,
                 message="optional, not installed",
-                hint="install with: pip install 'summarizer[pdf]'",
+                hint="install with: pip install 'local-terminal-summarizer[pdf]'",
                 optional=True,
             )
         )
@@ -121,7 +121,7 @@ def _reader_checks() -> list[Check]:
                 "OCR",
                 False,
                 message=f"optional, not installed (missing: {', '.join(missing)})",
-                hint="pip install 'summarizer[ocr]' plus local Tesseract and "
+                hint="pip install 'local-terminal-summarizer[ocr]' plus local Tesseract and "
                      "Poppler; nothing is installed automatically and no "
                      "online OCR service is used",
                 optional=True,
