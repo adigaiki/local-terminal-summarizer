@@ -12,7 +12,11 @@ from typing import Any, Iterator
 
 from summarizer.engine.backends import BackendSpec
 from summarizer.engine.base import Engine
-from summarizer.engine.capabilities import EngineCapabilities
+from summarizer.engine.capabilities import (
+    CONTEXT_SOURCE_CONFIG,
+    CONTEXT_SOURCE_SERVER,
+    EngineCapabilities,
+)
 from summarizer.engine.client import HttpClient, HttpStatusError, HttpStatusErrorKinds
 from summarizer.errors import ContextOverflow, EngineError, MalformedResponse, ModelNotFound, TruncationDetected
 from summarizer.chunking.token import estimate_tokens
@@ -26,25 +30,33 @@ MODELS_PATH = "/v1/models"
 
 _RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 
-# Truncation detection thresholds, chosen from measured Ollama behaviour. The
-# token estimator runs ~20-25% high on ordinary prose, so a fully processed
-# prompt reports ~0.80-0.85 of our estimate; a silently truncated prompt
-# reported 0.20-0.31. 0.6 sits safely between the two.
-_TRUNCATION_LOW_RATIO = 0.6
-# Also catch the case where the server stopped exactly at the window while we
-# estimated more (a denser tokenizer than the estimate).
-_TRUNCATION_NEAR_WINDOW = 0.9
+# Truncation detection uses Ollama's measured signature: a truncated prompt is
+# processed as exactly ``window/2 + 2`` prompt tokens (measured on Ollama
+# 0.35.0: 2050 of 4096, 8194 of 16384, 1026 of 2048, 16386 of 32768). Two
+# tiers. The hard tier (our estimate far above what the server processed)
+# retries with smaller chunks; the soft tier (fingerprint match but a low
+# estimate) only notes it, because a low estimate means truncation cannot be
+# distinguished from a genuine count.
+_TRUNCATION_MARGIN = 2
+_TRUNCATION_RATIO = 1.25
 
 
-def _truncation_reason(*, est: int, reported: int, window: int | None) -> str | None:
-    if est <= 0 or reported <= 0:
+def _truncation_tier(
+    *, est: int, reported: int, window: int | None, window_source: str | None
+) -> str | None:
+    """Return ``"hard"``, ``"soft"`` or ``None`` for one call's prompt tokens.
+
+    The fingerprint is only meaningful against a trustworthy window, so it is
+    applied only when the window came from the server or from
+    ``[engine] context_length``.
+    """
+    if not window or window <= 0 or reported <= 0 or est <= 0:
         return None
-    ratio = reported / est
-    if ratio < _TRUNCATION_LOW_RATIO:
-        return f"only {ratio:.0%} of the estimated prompt tokens"
-    if window and reported >= window * _TRUNCATION_NEAR_WINDOW and est > reported * 1.1:
-        return f"prompt tokens at the {window}-token window while the estimate was larger"
-    return None
+    if window_source not in (CONTEXT_SOURCE_SERVER, CONTEXT_SOURCE_CONFIG):
+        return None
+    if abs(reported - (window // 2 + 2)) > _TRUNCATION_MARGIN:
+        return None
+    return "hard" if est > _TRUNCATION_RATIO * reported else "soft"
 
 
 def _endpoint_v1(base_path: str, path: str) -> str:
@@ -95,6 +107,7 @@ class OpenAICompatEngine(Engine):
         # result and records it).
         self.truncation_action = "raise"
         self.last_truncation: str | None = None
+        self._soft_noted = False
         # Only backends whose usage counts are trustworthy are checked; a
         # generic OpenAI-compatible server may report counts the estimator
         # cannot be compared against. Tests may override this directly.
@@ -178,13 +191,17 @@ class OpenAICompatEngine(Engine):
     def _check_truncation(self, prompt: str, *, streaming: bool) -> None:
         """Detect a silently truncated prompt from the server's own counts.
 
-        Compares the server-reported prompt tokens against our pre-send
-        estimate and the planned window. A clear shortfall raises
-        :class:`TruncationDetected` so the pipeline retries with smaller
-        chunks -- except while streaming, where output has already been
-        emitted, so it warns and records the truncation instead. With
-        ``truncation_action == "warn"`` it always warns (the run accepts the
-        result).
+        Uses Ollama's measured truncation signature (``window/2 + 2`` prompt
+        tokens) against a trustworthy window:
+
+        * **hard** -- the estimate is far above what the server processed
+          (``est > 1.25 * reported``): raise :class:`TruncationDetected` so the
+          pipeline retries with smaller chunks, except while streaming (output
+          already emitted) or when ``truncation_action == "warn"``, where it
+          warns and records the truncation instead.
+        * **soft** -- the signature matches but the estimate is low, so
+          truncation cannot be told from a genuine count: note it once on
+          stderr, with no retry and no flag.
         """
         usage = self.last_usage
         if not self.detect_truncation or not usage:
@@ -193,17 +210,32 @@ class OpenAICompatEngine(Engine):
         if not isinstance(reported, int) or reported <= 0:
             return
         est = estimate_tokens(prompt)
-        window = self._capabilities.context_length if self._capabilities else None
-        reason = _truncation_reason(est=est, reported=reported, window=window)
-        if reason is None:
+        caps = self._capabilities
+        window = caps.context_length if caps else None
+        source = caps.context_source if caps else None
+        tier = _truncation_tier(
+            est=est, reported=reported, window=window, window_source=source
+        )
+        if tier is None:
             self.last_truncation = None  # a clean call clears a stale flag
             return
-        self.last_truncation = reason
+        if tier == "soft":
+            # Fingerprint match, but our estimate is not high enough to call it
+            # a truncation: note once; no retry, no flag, no exit change.
+            self.last_truncation = None
+            if not self._soft_noted and self._diag:
+                self._soft_noted = True
+                self._diag.info(
+                    "token count matches Ollama's truncation signature; the "
+                    "summary may be missing the beginning"
+                )
+            return
+        self.last_truncation = "truncation-signature"
         message = (
             f"the backend processed {reported} prompt tokens for a prompt of "
-            f"~{est} estimated tokens ({reason}); the prompt was likely "
-            "truncated and the summary may be missing the beginning of the "
-            "document"
+            f"~{est} estimated tokens, matching Ollama's truncation signature "
+            f"(window/2 + 2 = {window // 2 + 2}); the summary may be missing the "
+            "beginning of the document"
         )
         hint = (
             "lower `[chunking] max_tokens_per_chunk`, raise the model's context "

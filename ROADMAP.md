@@ -73,3 +73,5 @@ and that gap is worth more than another milestone.
 GUI, URL fetching, cloud models, agents, tool execution, embeddings/vector databases, self-update, background services, automatic model installation, multi-model ensemble/routing, and refine-based aggregation. These remain out of scope until a concrete need appears.
 
 Also deferred: forwarding an explicit `num_ctx` to the native Ollama endpoint (an opt-in, per-run served-window override) as an alternative to the warm-up-and-read approach. It is not sent today; the warm-up path learns the served window without changing server options.
+
+Also deferred: **in-run calibration from unclipped calls** — learn the real tokens-per-character ratio for the loaded model from responses that were *not* truncated, and use it to shrink the estimator's error for the rest of the run (especially for scripts the estimator is several times low on). In-run only, no persisted state; not implemented.

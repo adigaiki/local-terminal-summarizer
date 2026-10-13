@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 
 import pytest
@@ -9,8 +10,9 @@ import pytest
 from summarizer.chunking.strategies import budget_for
 from summarizer.chunking.token import estimate_tokens
 from summarizer.config import ChunkingSettings, Config, DefaultsSettings, EngineSettings
-from summarizer.engine.capabilities import EngineCapabilities
-from summarizer.engine.openai import _truncation_reason
+from summarizer.engine.backends import BackendSpec
+from summarizer.engine.capabilities import CONTEXT_SOURCE_SERVER, EngineCapabilities
+from summarizer.engine.openai import OpenAICompatEngine, _truncation_tier
 from summarizer.errors import ContextOverflow, TruncationDetected
 from summarizer.log import Diagnostics
 from summarizer.pipeline import Pipeline, PipelineOptions
@@ -19,25 +21,82 @@ from summarizer.profiles import load_profile
 _CONTEXT = 2000
 
 
-# --- threshold arithmetic (numbers come from the measured Ollama sweep) ------
+# --- tier arithmetic (numbers from the measured Ollama 0.35.0 sweep) --------
 
 
-def test_estimator_bias_is_not_flagged():
-    # A fully processed prompt reported ~0.80-0.85 of our estimate.
-    assert _truncation_reason(est=5000, reported=4000, window=32768) is None
-    assert _truncation_reason(est=1109, reported=910, window=4096) is None
+def _tier(reported, est, window=4096, source=CONTEXT_SOURCE_SERVER):
+    return _truncation_tier(
+        est=est, reported=reported, window=window, window_source=source
+    )
 
 
-def test_clear_shortfall_is_flagged():
-    # The measured truncation cases reported 0.20-0.31 of the estimate.
-    assert _truncation_reason(est=10080, reported=2050, window=4096) is not None
-    assert _truncation_reason(est=6716, reported=2050, window=4096) is not None
+def test_exact_signature_with_a_high_estimate_is_hard():
+    # window/2 + 2 == 2050; est 3000 > 1.25 * 2050.
+    assert _tier(2050, 3000) == "hard"
 
 
-def test_stop_at_the_window_is_flagged():
-    # Denser tokenizer than the estimate: the server stopped at the window.
-    assert _truncation_reason(est=6000, reported=3800, window=4096) is not None
-    assert _truncation_reason(est=3900, reported=3400, window=4096) is None
+def test_exact_signature_with_a_low_estimate_is_soft():
+    # est 2000 <= 1.25 * 2050: a match, but not distinguishable from a real count.
+    assert _tier(2050, 2000) == "soft"
+
+
+def test_the_2059_table_case_is_not_flagged():
+    # A genuine, fully processed table reported 2059: outside +/-2 of 2050.
+    assert _tier(2059, 848) is None
+    assert _tier(2059, 3000) is None
+
+
+def test_just_outside_the_margin_is_not_flagged():
+    assert _tier(2047, 3000) is None
+    assert _tier(2053, 3000) is None
+    assert _tier(2048, 3000) == "hard"  # inside +/-2
+    assert _tier(2052, 3000) == "hard"
+
+
+def test_fingerprint_needs_a_trustworthy_window():
+    assert _tier(2050, 3000, source="fallback") is None
+    assert _tier(2050, 3000, source="server-trained-max") is None
+    assert _tier(2050, 3000, window=None) is None
+
+
+# --- engine behaviour for each tier -----------------------------------------
+
+
+def _engine(reported: int, *, source: str = CONTEXT_SOURCE_SERVER) -> OpenAICompatEngine:
+    spec = BackendSpec(name="ollama", kind="ollama", usage_reporting=True)
+    engine = OpenAICompatEngine(EngineSettings(model="m"), spec=spec)
+    engine._capabilities = EngineCapabilities(context_length=4096, context_source=source)
+    engine.last_usage = {"prompt_tokens": reported}
+    engine._diag = Diagnostics(stream=io.StringIO())
+    return engine
+
+
+def _prompt_est(target: int) -> str:
+    # estimate_tokens("word " * n) rounds to ~1.4 * n
+    return "word " * max(1, int(target / 1.4))
+
+
+def test_engine_raises_on_the_hard_signature():
+    engine = _engine(2050)
+    with pytest.raises(TruncationDetected):
+        engine._check_truncation(_prompt_est(3000), streaming=False)
+    assert engine.last_truncation == "truncation-signature"
+
+
+def test_engine_notes_the_soft_signature_once_without_raising():
+    engine = _engine(2050)
+    prompt = _prompt_est(2000)
+    engine._check_truncation(prompt, streaming=False)  # no raise
+    engine._check_truncation(prompt, streaming=False)  # second call: still one note
+    assert engine.last_truncation is None
+    assert engine._diag.stream.getvalue().count("truncation signature") == 1
+
+
+def test_engine_ignores_the_2059_table_case():
+    engine = _engine(2059)
+    engine._check_truncation(_prompt_est(3000), streaming=False)
+    assert engine.last_truncation is None
+    assert "truncation signature" not in engine._diag.stream.getvalue()
 
 
 # --- engine behaviour -------------------------------------------------------
@@ -206,30 +265,31 @@ def test_dry_run_never_prepares_or_probes_the_backend(tmp_path):
     assert engine.caps_calls == 0
 
 
-class _UnderCount(_Engine):
-    """Under-counts ~3.6x: any prompt estimated over ~1100 tokens is truncated.
-
-    The estimator is 3.6x low, so the plan must shrink below ~0.28 of its
-    budget before the real prompt fits the window.
+class _HardSignatureEngine(_Engine):
+    """Simulates the hard truncation signature: the server reports ~28% of the
+    estimate (reported/est = 0.28), i.e. our estimate is ~3.6x the tokens it
+    processed. This is the direction hard detection can raise on
+    (reported/est < 0.8); a genuine under-estimate (est below reported) cannot
+    trigger a retry, only the soft note.
     """
 
     def generate(self, *, prompt, json_object=False, temperature=None) -> str:
         self.calls += 1
         if estimate_tokens(prompt) > 1100:
-            raise TruncationDetected("under-counted prompt", ratio=0.28)
+            raise TruncationDetected("hard signature", ratio=0.28)
         return '"ok"' if json_object else "summary"
 
 
-def test_ratio_based_retry_converges_on_a_large_underestimate(tmp_path):
+def test_ratio_based_retry_converges_on_a_hard_truncation(tmp_path):
     config = _config()
     source = tmp_path / "doc.txt"
     source.write_text(_single_shot_doc(config), encoding="utf-8")
-    engine = _UnderCount()
+    engine = _HardSignatureEngine()
 
     result = _run(engine, config, source)
 
     assert result.truncated is False
     assert result.aggregation.name == "mapreduce"
-    # One retry, sized from the observed 0.28 ratio (da * 0.9), not a fixed 0.75.
+    # One retry, sized from the observed 0.28 ratio (x 0.9), not a fixed 0.75.
     assert result.stats.get("context_scale") == pytest.approx(0.252, abs=0.01)
     assert engine.calls <= 1 + 8

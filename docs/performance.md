@@ -61,21 +61,25 @@ Two failure modes with a local server are handled explicitly:
   trained maximum, and says so. `[engine] context_length` always wins.
   `doctor` never warms up — it reports the trained maximum with a `!` line and
   points at `ollama ps`.
-- **A prompt can be silently truncated.** If a backend processes fewer prompt
-  tokens than were sent, the summary may be missing the document's beginning.
-  For backends whose usage counts are trustworthy (Ollama), the tool compares
-  the server-reported prompt tokens against its estimate and, on a clear
-  shortfall or a stop at the window, treats it as a context overflow and
-  retries with smaller chunks. After the bounded retries it warns loudly, sets
-  `truncated: true` in the JSON envelope, and still exits 0 — unless
-  `--strict`, which fails. Detection is skipped for generic OpenAI-compatible
-  backends (`usage_reporting = false`) whose counts vary, and while streaming it
-  warns rather than retries, because the text has already been emitted.
+- **A prompt can be silently truncated.** Ollama processes a truncated prompt as
+  exactly **`window/2 + 2`** prompt tokens; the tool matches that signature
+  (within ±2) against a window it trusts (source `server` or `config`):
+  - **hard** — our estimate is far above what the server processed
+    (`estimate > 1.25 × reported`): treated as a context overflow, retried with
+    smaller chunks sized from the observed ratio; after the bounded retries the
+    run warns, sets `truncated: true` in the JSON envelope, and exits 0, unless
+    `--strict`, which fails.
+  - **soft** — the signature matches but the estimate is low, so truncation
+    cannot be told from a real count: one stderr note, no retry, no flag, no
+    exit-code change.
 
-  The thresholds were measured on **Ollama 0.35.0** with a 4096-token served
-  window (`qwen2.5:3b`) and checked against a second tokenizer (`qwen3:4b`);
-  the truncation cap was half the served window in both (2050 of 4096, and 8194
-  of 16384).
+  Detection is skipped for generic OpenAI-compatible backends
+  (`usage_reporting = false`) whose counts vary, and while streaming it warns
+  rather than retries, because the text has already been emitted.
+
+  Fingerprint measured on **Ollama 0.35.0**, on `qwen2.5:3b` and (second
+  tokenizer) `qwen3:4b`: **2050 of 4096, 4098 of 8192, 8194 of 16384, 1026 of
+  2048, 16386 of 32768** — i.e. `window/2 + 2` in every case.
 
 ## Bounded concurrency
 

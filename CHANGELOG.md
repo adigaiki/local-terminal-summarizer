@@ -41,11 +41,13 @@ it is, "released" means a git tag. Design notes and rationale live in
   silently drop the beginning of a document). If the warm-up fails it plans
   against a conservative cap and warns. `doctor` reports the trained maximum
   with a `!` line and points at `ollama ps`.
-- **Silent truncation is detected:** for backends that report prompt tokens
-  (Ollama), a clear shortfall against the estimate — or a stop at the window —
-  is treated as a context overflow and retried with smaller chunks; after the
-  retries the run warns, sets `truncated: true` in the JSON envelope, and exits
-  0 (or fails under `--strict`).
+- **Silent truncation is detected:** Ollama processes a truncated prompt as
+  exactly `window/2 + 2` prompt tokens (measured on Ollama 0.35.0). When that
+  signature matches and the estimate is far above the count, the run is retried
+  with smaller chunks sized from the observed ratio; if it still truncates it
+  warns, sets `truncated: true` in the JSON envelope, and exits 0 (or fails
+  under `--strict`). A lower-confidence match only notes it on stderr, with no
+  retry and no flag.
 - **Docs:** the README was restructured and shortened (detail moved to
   `docs/`, including a new `docs/troubleshooting.md`). It now shows a real
   example summary, states that `doctor`'s reported window is state-dependent

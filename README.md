@@ -10,12 +10,11 @@ stdin into a concise summary using a **local** LLM server you already run
 tool: pipe a document in, get a summary on stdout, with long-document chunking,
 a trusted/untrusted input boundary, stable JSON output, and diagnostics.
 
-Nothing is sent to the internet by default. Every request goes to a model
-server on your own machine, over loopback (`http://localhost:11434`). Two
-things you can opt into produce other traffic: `--check-update`, which makes
-one request to a URL you configure in `[update]`, and pointing `endpoint` at a
-non-loopback host, which sends the document there and is refused unless you
-set `[engine] allow_non_loopback`. See [docs/security.md](docs/security.md).
+Nothing leaves your machine by default: every request goes to a model server
+over loopback (`http://localhost:11434`). Two opt-ins can produce other
+traffic: `--check-update` (one request to a URL you configure in `[update]`),
+and a non-loopback `endpoint`, which is refused unless you set
+`[engine] allow_non_loopback`. See [docs/security.md](docs/security.md).
 
 - MIT-licensed, Python 3.11+, zero runtime dependencies in the core install
   (PDF and OCR are optional extras). No cloud, no telemetry, no model download,
@@ -44,13 +43,7 @@ On 14 March, at 02:40, the night-shift on-call engineer replaced a failing cache
 
 The on-call engineer noticed a rise in stale-read metrics at 02:52 and rolled the replica back at 03:05. Error rates were normal by 03:20, and the stale-read rate returned to its baseline shortly afterwards.
 
-Eleven customers viewed a stale price for at least one product. Two support tickets were filed; both customers were told the price they saw at checkout was the price charged. No refunds or credits were issued.
-
-The replacement procedure drained the old node and added the new one, but it did not wait for the new node's replication lag to fall below the read threshold before it began serving traffic. The health check reported the node as ready as soon as it accepted connections, which happens well before its data is current.
-
-The incident is rated low severity: no data was lost, no order was mispriced, and the rollback was clean. The follow-up actions are owned by the pricing platform team and are due within two weeks. The actions include adding a staleness check to the readiness probe, shortening the cache TTL during node replacements, making the replacement procedure wait for replication lag explicitly, and adding a dashboard panel for replication lag next to the stale-read rate.
-
-These actions are designed to prevent similar incidents from occurring in the future.
+… (excerpt; the full output also covers impact, cause, and follow-up actions)
 ```
 
 A different local model reads differently. The `--format json` envelope and the
@@ -87,12 +80,10 @@ full schema are in
 - **Python 3.11 or newer.**
 - **A local model server** with at least one model pulled. The default backend
   is [Ollama](https://ollama.com/); see [Quick start](#quick-start-ollama).
-- **A model that fits your machine.** A 3B–8B instruct model is plenty for
-  summarization. Rule of thumb: a Q4-quantized model needs roughly its
-  download size of RAM, plus a little for the context window. If the model
-  fits in GPU memory it is fast (tens of tokens/second); if it spills to CPU
-  it still works but can drop to ~1 token/second. `ollama ps` shows the
-  CPU/GPU split and the serving context window.
+- **A model that fits your machine.** A 3B–8B instruct model is plenty. A Q4
+  model needs roughly its download size of RAM; if it fits in GPU memory it is
+  fast, and if it spills to CPU it can drop to ~1 token/second. `ollama ps`
+  shows the CPU/GPU split and the serving window.
 - **Platforms:** tested in CI on **Linux** and **macOS** (both run the full
   suite); WSL is expected to work. The code uses only POSIX APIs (`flock`,
   signals). Native Windows is unsupported.
@@ -138,11 +129,6 @@ are installed. A healthy run looks like this (with the custom 16k variant from
 the note below configured):
 
 ```text
-Summarizer diagnostics
-
-✓ Configuration — loaded from config files + environment
-✓ Installation — summarizer 0.6.0 on Python 3.14
-✓ Cache — off (no local state is written)
 ✓ Backend reachable — http://localhost:11434
 ✓ Model available — configured model 'qwen2.5-3b-16k' is installed
 ✓ Context window known — 16384 tokens (server)
@@ -150,6 +136,9 @@ Summarizer diagnostics
 
 Everything looks good.
 ```
+
+The full output, and what a failure looks like, are in
+[docs/troubleshooting.md](docs/troubleshooting.md#what-doctor-prints).
 
 **The window `doctor` reports is state-dependent.** With the model *unloaded*,
 Ollama answers with the model's **trained maximum** (`/api/show`); once it is
@@ -246,16 +235,10 @@ model = "qwen2.5:3b"
 timeout_seconds = 60
 ```
 
-Or point at a server with a one-off environment variable:
-
-```sh
-SUMMARIZER_MODEL=qwen3:8b summarize article.md
-SUMMARIZER_BACKEND=llama.cpp SUMMARIZER_ENDPOINT=http://localhost:8080 summarize article.md
-```
-
+Or override for one run: `SUMMARIZER_MODEL=qwen3:8b summarize article.md`.
 A project `./summarizer.toml` is read only when you opt in
 (`SUMMARIZER_PROJECT_CONFIG=1`). Every key, the precedence rules, the
-environment-variable list, and an example file are in
+environment variables, and a full example are in
 [docs/configuration.md](docs/configuration.md) and
 [config.example.toml](config.example.toml).
 
@@ -268,20 +251,15 @@ Built-in profiles: **`plain` (the default)**, `code`, `academic`, and
 
 ## Safety: trusted vs. untrusted input
 
-Document text is untrusted. Each request wraps it in a fresh, random boundary
-that is checked against the content first, so boundary-shaped text cannot close
-the region early. Map-reduce interim summaries are treated the same way — as
-untrusted data, never as instructions.
+Document text is untrusted: each request wraps it in a fresh random boundary
+checked against the content first, and map-reduce interim summaries get the
+same treatment. `--context FILE` is the one input **you** mark as trusted — it
+is kept in a separate labelled section, never mixed with the document.
 
-`--context FILE` is the one input **you** mark as trusted: it is placed in a
-separate, labelled section and never mixed with the document. Only pass a file
-whose origin you trust, because its content is treated as instructions.
-
-These are structural guarantees, not a claim that prompt injection is solved.
-The full threat model is [SECURITY.md](SECURITY.md); the prompt-boundary design
-is [docs/design.md](docs/design.md); the local-state and privacy summary is
-[docs/security.md](docs/security.md). Root `SECURITY.md` also holds the private
-vulnerability-reporting policy — that is why there are two security documents.
+These are structural guarantees, not a solved problem. See
+[SECURITY.md](SECURITY.md) (threat model and private vulnerability reporting —
+hence two security docs), [docs/design.md](docs/design.md), and
+[docs/security.md](docs/security.md).
 
 ## Verifying a summary
 
@@ -366,21 +344,19 @@ no-input error — is in [docs/troubleshooting.md](docs/troubleshooting.md).
 `summarize` produces a probabilistic summary from a local model. It is the
 wrong tool when being wrong is expensive:
 
-- **Anything where a wrong number or claim matters** — legal, medical,
-  financial, or safety-critical text. `--verify` is a grep, not fact-checking,
-  and a clean report is not proof. Treat `--format json` output as untrusted at
-  any automation boundary.
-- **Wide tables on a small model.** Structured table extraction fixes column
+- **Where a wrong number or claim matters** (legal, medical, financial,
+  safety-critical). `--verify` is a grep, not fact-checking, and a clean report
+  is not proof; treat `--format json` as untrusted at any automation boundary.
+- **Wide tables on a small model.** Table structuring fixes column
   *assignment*, not judgment; a 3B model can still garble an 8-column table.
-- **Documents that need reasoning across the whole text.** Map-reduce
-  summarizes each chunk independently, so a term defined in one part and used
-  far away can be lost. Prefer a model whose context holds the document in one
-  direct call — `--dry-run` shows the plan, and `--strict` refuses to chunk.
+- **Documents needing reasoning across the whole text.** Map-reduce summarizes
+  chunks independently, so a term defined in one part and used far away can be
+  lost; prefer a model whose context holds the document in one call
+  (`--dry-run` shows the plan, `--strict` refuses to chunk).
 - **Content you would not send to a local model.** The tool does not redact;
   the model sees the document.
 
-The honest state of summary quality, and why this list exists, is in
-[docs/quality.md](docs/quality.md).
+The honest state of summary quality is in [docs/quality.md](docs/quality.md).
 
 ## How this differs from other tools
 
@@ -394,12 +370,6 @@ models. Claims below are from each project's own README.
 | `ollama run` | One prompt against a local model | No chunking, budgeting, trust boundary, or output validation |
 | [`llm`](https://github.com/simonw/llm) | CLI/Python for many models, remote and local (Ollama via a plugin), with SQLite logging, embeddings, schemas and tools | General-purpose; long-document summarization is on you |
 | [`fabric`](https://github.com/danielmiessler/fabric) | A library of reusable prompts ("Patterns", including `summarize`) over many providers, with a REST API | Prompt-library-first; `summarize` is pipeline-first and local-only |
-
-The differentiators, all verifiable here: the trusted/untrusted prompt
-boundary ([docs/design.md](docs/design.md)), budgeted chunking and map-reduce
-([docs/performance.md](docs/performance.md)), validated JSON with one repair
-retry ([docs/readers.md](docs/readers.md)), stdout/stderr discipline with
-stable exit codes ([docs/cli.md](docs/cli.md)), and `doctor`.
 
 ## Documentation
 
