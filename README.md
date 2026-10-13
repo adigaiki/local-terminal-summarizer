@@ -46,8 +46,8 @@ The on-call engineer noticed a rise in stale-read metrics at 02:52 and rolled th
 … (excerpt; the full output also covers impact, cause, and follow-up actions)
 ```
 
-A different local model reads differently. The `--format json` envelope and the
-full schema are in
+Output varies from run to run and between models. The `--format json` envelope
+and the full schema are in
 [docs/readers.md](docs/readers.md#provenance-and-the-json-schema).
 
 ## Table of contents
