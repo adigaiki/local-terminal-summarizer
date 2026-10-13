@@ -174,3 +174,33 @@ def test_a_successful_retry_is_not_flagged_truncated(tmp_path):
     result = _run(_TruncateOnce(), config, source)
 
     assert result.truncated is False
+
+
+class _NoContact(_Engine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prepared = False
+        self.caps_calls = 0
+
+    def prepare(self) -> None:
+        self.prepared = True
+
+    def capabilities(self) -> EngineCapabilities:
+        self.caps_calls += 1
+        return super().capabilities()
+
+
+def test_dry_run_never_prepares_or_probes_the_backend(tmp_path):
+    """--dry-run contacts nothing: no warm-up, no capability probe."""
+    config = _config()
+    source = tmp_path / "doc.txt"
+    source.write_text("A short note.", encoding="utf-8")
+    engine = _NoContact()
+
+    report = Pipeline(config, diag=Diagnostics(quiet=True), engine=engine).dry_run(
+        str(source), opts=PipelineOptions()
+    )
+
+    assert report.render()
+    assert engine.prepared is False
+    assert engine.caps_calls == 0
