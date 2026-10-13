@@ -72,6 +72,11 @@ Two failure modes with a local server are handled explicitly:
   backends (`usage_reporting = false`) whose counts vary, and while streaming it
   warns rather than retries, because the text has already been emitted.
 
+  The thresholds were measured on **Ollama 0.35.0** with a 4096-token served
+  window (`qwen2.5:3b`) and checked against a second tokenizer (`qwen3:4b`);
+  the truncation cap was half the served window in both (2050 of 4096, and 8194
+  of 16384).
+
 ## Bounded concurrency
 
 Independent map chunks can run with bounded concurrency (default `1`, which is

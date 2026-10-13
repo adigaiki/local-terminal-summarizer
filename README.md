@@ -163,7 +163,7 @@ summarize: error: the model is not available on the endpoint: ... not found
 hint: is the model pulled/loaded on the server? (`ollama run <model>`)
 ```
 
-Tested against Ollama 0.34.x. The adapter uses `/api/tags` (model list),
+Tested against Ollama 0.35.0. The adapter uses `/api/tags` (model list),
 `/api/show` (context), `/api/ps` (serving window of the loaded model), and the
 OpenAI-compatible `/v1/chat/completions` endpoint; `doctor` reports whichever
 of these it can reach.
@@ -420,6 +420,14 @@ Ollama but are untested here.
   for your tokenizer. The tool retries with smaller chunks automatically; if it
   still fails, raise the model's context window, lower `[engine] max_tokens`,
   or set `[chunking] token_safety_margin` above 1.0.
+- **`the backend processed ... prompt tokens ... truncated`** (or
+  `"truncated": true` in `--format json`) — the server processed fewer prompt
+  tokens than were sent, so the summary may be missing the document's
+  beginning. The run already retried with smaller chunks and then accepted the
+  result; fix it by lowering `[chunking] max_tokens_per_chunk`, raising the
+  model's context window, or setting `[engine] context_length`. While
+  *streaming* the tool can only warn (the text has already been printed), so a
+  streamed run does not retry — use `--no-stream` to get the retry behavior.
 - **`appears to be binary`** — the file is not text (or a PDF without a
   `.pdf` extension); convert it or rename it to `*.pdf`.
 - **No input / TTY** — `summarize` with no argument and a TTY stdin errors
