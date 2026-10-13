@@ -4,23 +4,22 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/adigaiki/local-terminal-summarizer/actions/workflows/ci.yml/badge.svg)](https://github.com/adigaiki/local-terminal-summarizer/actions/workflows/ci.yml)
 
-`summarize` is a Linux-first command-line summarizer that turns a file or stdin
-into a concise summary using a **local** LLM server you already run (Ollama,
-llama.cpp, LM Studio, or any OpenAI-compatible server). It is a Unix tool:
-pipe a document in, get a summary on stdout, with long-document chunking, a
-trusted/untrusted input boundary, stable JSON output, and diagnostics.
+`summarize` is a Linux-and-macOS command-line summarizer that turns a file or
+stdin into a concise summary using a **local** LLM server you already run
+(Ollama, llama.cpp, LM Studio, or any OpenAI-compatible server). It is a Unix
+tool: pipe a document in, get a summary on stdout, with long-document chunking,
+a trusted/untrusted input boundary, stable JSON output, and diagnostics.
 
 Nothing is sent to the internet by default. Every request goes to a model
 server on your own machine, over loopback (`http://localhost:11434`). Two
 things you can opt into produce other traffic: `--check-update`, which makes
 one request to a URL you configure in `[update]`, and pointing `endpoint` at a
-non-loopback host, which sends the document there. See
-[docs/security.md](docs/security.md).
+non-loopback host, which sends the document there and is refused unless you
+set `[engine] allow_non_loopback`. See [docs/security.md](docs/security.md).
 
-- MIT-licensed, Python 3.11+.
-- The core install has **zero runtime dependencies** beyond Python; PDF and
-  OCR are optional extras that add their own.
-- No cloud, no telemetry, no model download, no self-update.
+- MIT-licensed, Python 3.11+, zero runtime dependencies in the core install
+  (PDF and OCR are optional extras). No cloud, no telemetry, no model download,
+  no self-update.
 
 ## Why not just `ollama run`?
 
@@ -32,9 +31,36 @@ is wrapped in a fresh random boundary and treated as untrusted data while
 provenance; and `summarize doctor` tells you what is reachable, configured, and
 missing. It is one small tool, not a chat client.
 
+## Example
+
+Input (`docs/examples/cache-incident.md`, an original sample), summarized with
+the default `plain` profile on `qwen2.5-3b-16k` (Ollama 0.35.0):
+
+```console
+$ summarize docs/examples/cache-incident.md
+# Cache incident review: Stale Prices During Node Replacement
+
+On 14 March, at 02:40, the night-shift on-call engineer replaced a failing cache node in the `pricing` cluster. The node had been experiencing intermittent timeouts for about twenty minutes, and the replacement was treated as routine. During the swap, the pricing API served roughly four percent of requests from a replica that had not yet caught up. This resulted in some customers seeing prices that were up to an hour old for about three and a half minutes. No orders were placed at the stale prices, as the checkout service re-quotes against the primary node before authorization, and the seven orders that arrived during the window were priced from fresh data.
+
+The on-call engineer noticed a rise in stale-read metrics at 02:52 and rolled the replica back at 03:05. Error rates were normal by 03:20, and the stale-read rate returned to its baseline shortly afterwards.
+
+Eleven customers viewed a stale price for at least one product. Two support tickets were filed; both customers were told the price they saw at checkout was the price charged. No refunds or credits were issued.
+
+The replacement procedure drained the old node and added the new one, but it did not wait for the new node's replication lag to fall below the read threshold before it began serving traffic. The health check reported the node as ready as soon as it accepted connections, which happens well before its data is current.
+
+The incident is rated low severity: no data was lost, no order was mispriced, and the rollback was clean. The follow-up actions are owned by the pricing platform team and are due within two weeks. The actions include adding a staleness check to the readiness probe, shortening the cache TTL during node replacements, making the replacement procedure wait for replication lag explicitly, and adding a dashboard panel for replication lag next to the stale-read rate.
+
+These actions are designed to prevent similar incidents from occurring in the future.
+```
+
+A different local model reads differently. The `--format json` envelope and the
+full schema are in
+[docs/readers.md](docs/readers.md#provenance-and-the-json-schema).
+
 ## Table of contents
 
 - [Why not just `ollama run`?](#why-not-just-ollama-run)
+- [Example](#example)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Quick start (Ollama)](#quick-start-ollama)
@@ -44,14 +70,15 @@ missing. It is one small tool, not a chat client.
 - [Configuration](#configuration)
 - [Profiles](#profiles)
 - [Safety: trusted vs. untrusted input](#safety-trusted-vs-untrusted-input)
-- [Verifying a summary (`--verify`)](#verifying-a-summary---verify)
+- [Verifying a summary](#verifying-a-summary)
 - [Output and the JSON schema](#output-and-the-json-schema)
-- [Local state: cache and sessions](#local-state-cache-and-sessions)
+- [Local state](#local-state)
 - [Commands](#commands)
 - [Evaluation is mechanical](#evaluation-is-mechanical)
 - [Speed and system load](#speed-and-system-load)
 - [Troubleshooting](#troubleshooting)
 - [When not to use this](#when-not-to-use-this)
+- [How this differs from other tools](#how-this-differs-from-other-tools)
 - [Documentation](#documentation)
 - [Contributing, changelog, license](#contributing-changelog-license)
 
@@ -82,29 +109,13 @@ cd local-terminal-summarizer
 pipx install .            # or: uv tool install .
 ```
 
-From a virtualenv instead:
+From a virtualenv instead: `python3 -m venv .venv &&
+.venv/bin/python -m pip install -e '.[test]'`. Optional extras (the base
+install stays dependency-free): `pipx install '.[pdf]'` for PDF text and
+`pipx install '.[ocr]'` for OCR (which also needs system `tesseract` and
+Poppler). Uninstall with `pipx uninstall local-terminal-summarizer`.
 
-```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[test]'
-.venv/bin/summarize --version
-```
-
-Optional extras (the base install stays dependency-free):
-
-```sh
-pipx install '.[pdf]'     # PDF text extraction (pypdf + fonttools)
-pipx install '.[ocr]'     # OCR: adds pytesseract + pdf2image; also needs the
-                          # system tesseract and Poppler (pdftoppm, pdfinfo)
-```
-
-Uninstall:
-
-```sh
-pipx uninstall local-terminal-summarizer   # or: uv tool uninstall local-terminal-summarizer
-```
-
-Releases, packaging, and the published wheel are described in
+Releases, packaging, and TestPyPI-first publishing are in
 [docs/installation.md](docs/installation.md).
 
 ## Quick start (Ollama)
@@ -123,44 +134,40 @@ summarize doctor
 `summarize doctor` is the first thing to run when anything is wrong. It checks
 configuration, whether the backend is reachable, whether the configured model
 exists, the context window and where it came from, and which optional extras
-are installed. A healthy run looks like this (with `qwen2.5-3b-16k`
-configured):
+are installed. A healthy run looks like this (with the custom 16k variant from
+the note below configured):
 
 ```text
 Summarizer diagnostics
 
 ✓ Configuration — loaded from config files + environment
-    precedence: command line > environment > project config > user config > built-in defaults
-    user config: ~/.config/summarizer/config.toml
 ✓ Installation — summarizer 0.6.0 on Python 3.14
 ✓ Cache — off (no local state is written)
-✓ Backend reachable
-    endpoint: http://localhost:11434
+✓ Backend reachable — http://localhost:11434
 ✓ Model available — configured model 'qwen2.5-3b-16k' is installed
-✓ Streaming supported — yes
 ✓ Context window known — 16384 tokens (server)
-! OCR — optional, not installed (missing: pytesseract/pdf2image)
-
-Backend:
-  backend:  ollama
-  model:    qwen2.5-3b-16k
-  endpoint: http://localhost:11434
+! OCR — optional, not installed
 
 Everything looks good.
 ```
 
-If the backend is down, `doctor` says so plainly and exits non-zero, and a
-normal run fails with a hint rather than a traceback:
+**The window `doctor` reports is state-dependent.** With the model *unloaded*,
+Ollama answers with the model's **trained maximum** (`/api/show`); once it is
+loaded it serves a smaller window, visible as the `CONTEXT` column of
+`ollama ps`. A plain `ollama pull qwen2.5:3b` reports a trained maximum of
+32768 while a 4 GiB GPU serves 4096. A normal run warms the model with one
+tiny request and re-reads the *served* window before planning, so it does not
+send an over-large prompt; `doctor` never warms anything and shows a `!`
+"Serving context window" line when it only has the trained maximum.
 
-```text
-✗ Backend reachable
-    endpoint: http://127.0.0.1:1
-    hint: start your local model server, or fix `[engine] endpoint` in config
-```
+To give a model a larger served window, create a derived model (verified):
 
-```text
-summarize: error: the model is not available on the endpoint: ... not found
-hint: is the model pulled/loaded on the server? (`ollama run <model>`)
+```sh
+cat > Modelfile <<'EOF'
+FROM qwen2.5:3b
+PARAMETER num_ctx 16384
+EOF
+ollama create qwen2.5-3b-16k -f Modelfile
 ```
 
 Tested against Ollama 0.35.0. The adapter uses `/api/tags` (model list),
@@ -207,7 +214,7 @@ There are no cloud providers. A backend is a local adapter:
 | `llama.cpp` (alias `llama-cpp`) | `http://localhost:8080` | llama.cpp server |
 | `lmstudio` (alias `lm-studio`) | `http://localhost:1234` | LM Studio |
 
-If you never set an endpoint, selecting a backend uses its loopback default.
+Selecting a backend without setting an endpoint uses its loopback default.
 Capability negotiation (streaming, structured JSON, reasoning control, context
 length) is described in [docs/backends.md](docs/backends.md).
 
@@ -247,9 +254,8 @@ SUMMARIZER_BACKEND=llama.cpp SUMMARIZER_ENDPOINT=http://localhost:8080 summarize
 ```
 
 A project `./summarizer.toml` is read only when you opt in
-(`SUMMARIZER_PROJECT_CONFIG=1`), so a cloned repository cannot silently change
-your model. Every key, the full precedence rules, the environment-variable
-list, and an example file are in
+(`SUMMARIZER_PROJECT_CONFIG=1`). Every key, the precedence rules, the
+environment-variable list, and an example file are in
 [docs/configuration.md](docs/configuration.md) and
 [config.example.toml](config.example.toml).
 
@@ -257,15 +263,15 @@ list, and an example file are in
 
 Built-in profiles: **`plain` (the default)**, `code`, `academic`, and
 `meeting`. Add or override one by dropping `NAME.md` into
-`~/.config/summarizer/prompts/`. `summarize profiles` lists them with their
-source. See [docs/configuration.md](docs/configuration.md#profiles).
+`~/.config/summarizer/prompts/`. `summarize profiles` lists them. See
+[docs/configuration.md](docs/configuration.md#profiles).
 
 ## Safety: trusted vs. untrusted input
 
 Document text is untrusted. Each request wraps it in a fresh, random boundary
-that is checked against the content first, so boundary-shaped text in a
-document cannot close the region early. Map-reduce interim summaries are
-treated the same way — as untrusted data, never as instructions.
+that is checked against the content first, so boundary-shaped text cannot close
+the region early. Map-reduce interim summaries are treated the same way — as
+untrusted data, never as instructions.
 
 `--context FILE` is the one input **you** mark as trusted: it is placed in a
 separate, labelled section and never mixed with the document. Only pass a file
@@ -274,67 +280,37 @@ whose origin you trust, because its content is treated as instructions.
 These are structural guarantees, not a claim that prompt injection is solved.
 The full threat model is [SECURITY.md](SECURITY.md); the prompt-boundary design
 is [docs/design.md](docs/design.md); the local-state and privacy summary is
-[docs/security.md](docs/security.md). Note that root `SECURITY.md` also holds
-the private vulnerability-reporting policy — that is why there are two
-security documents.
+[docs/security.md](docs/security.md). Root `SECURITY.md` also holds the private
+vulnerability-reporting policy — that is why there are two security documents.
 
-## Verifying a summary (`--verify`)
+## Verifying a summary
 
-`--verify` checks the summary against the source text and reports numbers or
-`ACRONYM (expansion)` phrases that do not appear there — a cheap first pass at
-hallucination detection. It is **grep, not a judge model**, so a flag is for
-review, not a verdict.
-
-The report goes to **stderr** after the summary (stdout stays clean and
-composable), and it is **advisory**: it does not change the exit status and does
-not edit the summary. With `--format json` it becomes a top-level
-`verification` object.
-
-```console
-$ summarize paper.pdf --verify
-<summary on stdout>
-verification: 2 unverified claims (34 numbers, 1 expansion checked)
-  number: 89.42(2)
-  expansion: M.E.W. (Molecular Ensemble with Water)
-```
-
-It is deliberately narrow: it does not catch a real number on the wrong label
-(a table column swap), the `Phrase (ACRONYM)` order, or non-numeric
-fabrication. Worked examples and the full list of limits are in
-[docs/verify.md](docs/verify.md).
+`--verify` reports numbers and `ACRONYM (expansion)` phrases in the summary
+that do not appear in the source: grep, not a judge model, and advisory (exit
+status unchanged). It does not catch a real number on the wrong label or
+non-numeric fabrication. Details: [docs/verify.md](docs/verify.md).
 
 ## Output and the JSON schema
 
 Default output is Markdown on stdout. `--format json` emits a stable envelope
 (`document`, `profile`, `engine`, `strategy`, `chunks`, `summary`,
-`chunk_provenance`, `duration_seconds`) with the schema and an example in
-[docs/readers.md](docs/readers.md#provenance-and-the-json-schema); `--verify`
-adds a top-level `verification` object. Provenance never leaks into
-plain/Markdown output and never enters trusted prompt instructions.
-`--dry-run` reports reader metadata and the prompt identity without contacting
-a backend.
+`chunk_provenance`, `duration_seconds`; `--verify` adds `verification`, and a
+detected truncation adds `truncated`). Schema and example:
+[docs/readers.md](docs/readers.md#provenance-and-the-json-schema). Provenance
+never leaks into plain/Markdown output and never enters trusted prompt
+instructions.
 
-## Local state: cache and sessions
+## Local state
 
-`summarize` writes nothing by default. Two optional, plain-file local stores
-exist — both are covered in [docs/performance.md](docs/performance.md),
-[docs/sessions.md](docs/sessions.md), and [docs/security.md](docs/security.md).
-
-- **Cache** (`summarize cache status|path|clear`) — **off by default**. When
-  enabled (`[cache] mode = "readwrite"`), it stores *derived summaries* only
-  (model output), keyed by a content hash of the document plus the model,
-  profile/prompt identity, and chunking settings, under `~/.cache/summarizer/`.
-  It never stores document text or source paths, and an unchanged re-run skips
-  the model. Off means no directory is created.
-- **Sessions** (`summarize session start|end|status`) — named local run records.
-  Group several runs under one label to review, later, which files you
-  summarized, with which profile, and how long each took. Entries are pointers
-  only (never summary text), and a run is recorded only when a session is
-  explicitly selected.
+`summarize` writes nothing by default. Two optional, plain-file stores:
+the **cache** (`summarize cache status|path|clear`; off by default; derived
+summaries only, keyed by content hash + model/profile, under
+`~/.cache/summarizer`, never document text or paths) and **sessions**
+(`summarize session start|end|status`; pointers only, recorded only when
+explicitly selected). See [docs/performance.md](docs/performance.md) and
+[docs/sessions.md](docs/sessions.md).
 
 ## Commands
-
-**Subcommands**
 
 | Command | Purpose |
 | --- | --- |
@@ -348,53 +324,25 @@ exist — both are covered in [docs/performance.md](docs/performance.md),
 | `summarize session start\|end\|status` | group runs under a named local record |
 | `summarize completions bash\|zsh\|fish` | shell completion script |
 
-**Notable flags**
-
-| Flag | Purpose |
-| --- | --- |
-| `--profile NAME` | `plain` (default), `code`, `academic`, or `meeting` |
-| `--format json` | stable JSON envelope with chunk provenance |
-| `--verify` | flag summary numbers/expansions absent from the source (advisory) |
-| `--context FILE` | trusted supplemental context, kept separate from the document |
-| `--dry-run` | plan the run; contacts no backend |
-| `--stats` | timing and token estimates on stderr |
-| `--ocr` | OCR a scanned PDF (optional extra) |
-| `--check-update` | one explicit request to a URL you configure in `[update]`; never automatic |
-| `-o FILE` | write output atomically to a file |
-
-Every option and the exit status are in [docs/cli.md](docs/cli.md).
+Every option (including `--verify`, `--context`, `--dry-run`, `--stats`,
+`--check-update`, `-o`) and the exit status are in [docs/cli.md](docs/cli.md).
 
 ## Evaluation is mechanical
 
-`summarize evaluate` runs a deterministic corpus against your local
-model/backend and applies **mechanical** checks — valid format, valid JSON, a
-retained sentinel, no echoed injection marker, expected strategy, bounded size —
-plus latency and estimated output tokens. These are **not objective quality
-scores**, and no external judge model is involved: a summary can pass every
-check and still be wrong. Whether the summaries are actually good is a separate
-question, addressed (partially, and with caveats) in
-[docs/quality.md](docs/quality.md); the harness itself is
+`summarize evaluate` applies **mechanical** checks (valid format/JSON, sentinel
+retention, marker absence, strategy, bounds) — not objective quality scores,
+and no judge model. Whether summaries are actually good is addressed, in part
+and with caveats, in [docs/quality.md](docs/quality.md); the harness is
 [docs/evaluation.md](docs/evaluation.md).
 
 ## Speed and system load
 
-Latency is dominated by whether the model fits your GPU. Real measurements on
-a laptop with a 4 GiB-VRAM GPU and 12 CPU threads:
-
-- `qwen2.5-3b-16k` (1.9 GB, GPU-resident): ~38 tok/s. A 14,000-token paper
-  summarized directly in ~21 s; a short note in ~1 s.
-- `qwen3:8b` (5.2 GB — too big for 4 GiB VRAM, so Ollama splits it
-  ~50/50 CPU/GPU): ~1.2 tok/s, minutes per summary.
-
-For long documents, **prompt processing** (reading the input) is a large part
-of the cost; keeping a document in a single direct call is usually faster and
-more coherent than map-reduce. If a run is slow, check `ollama ps` for the
-CPU/GPU split and the serving context window, and prefer a smaller model that
-stays on the GPU. `--stats` reports timing and token estimates on stderr.
-
-The CLI is GPU-agnostic: acceleration is whatever your model server provides.
-The numbers above are CUDA; Metal (macOS) and ROCm are expected to work through
-Ollama but are untested here.
+Latency is dominated by whether the model fits your GPU. Measured on a laptop
+with a 4 GiB-VRAM GPU: `qwen2.5-3b-16k` (GPU-resident) summarized a
+14,000-token paper directly in ~21 s; `qwen3:8b`, which does not fit and spills
+to CPU, runs ~1.2 tok/s. Keeping a document in one direct call is usually
+faster and more coherent than map-reduce. The CLI is GPU-agnostic; the numbers
+and the full picture are in [docs/performance.md](docs/performance.md).
 
 ## Troubleshooting
 
@@ -405,33 +353,13 @@ Ollama but are untested here.
 - **`the model is not available on the endpoint`** — pull it (`ollama pull
   qwen2.5:3b`) or set `[engine] model` to an installed name. `summarize models`
   lists what the backend reports.
-- **Empty summary or "PDF text extraction failed"** — the PDF is probably a
-  scan. Install the `ocr` extra plus system `tesseract`/Poppler and pass
-  `--ocr`; confirm with `summarize doctor`.
-- **`summarize` hangs / times out** — for a whole non-streaming request the
-  deadline is `[engine] timeout_seconds` (or `--timeout`). Streaming is more
-  forgiving: the wait for the *first* byte is `[engine]
-  first_token_timeout_seconds` (default 600, for slow CPU prompt processing),
-  and after that a stall is bounded by `timeout_seconds` as an idle timeout. A
-  CPU-bound model can legitimately exceed 60 s before its first token; raise
-  `first_token_timeout_seconds` rather than the idle timeout if that is the
-  case.
-- **`exceeds the model's context window`** — the token estimator under-counted
-  for your tokenizer. The tool retries with smaller chunks automatically; if it
-  still fails, raise the model's context window, lower `[engine] max_tokens`,
-  or set `[chunking] token_safety_margin` above 1.0.
 - **`the backend processed ... prompt tokens ... truncated`** (or
-  `"truncated": true` in `--format json`) — the server processed fewer prompt
-  tokens than were sent, so the summary may be missing the document's
-  beginning. The run already retried with smaller chunks and then accepted the
-  result; fix it by lowering `[chunking] max_tokens_per_chunk`, raising the
-  model's context window, or setting `[engine] context_length`. While
-  *streaming* the tool can only warn (the text has already been printed), so a
-  streamed run does not retry — use `--no-stream` to get the retry behavior.
-- **`appears to be binary`** — the file is not text (or a PDF without a
-  `.pdf` extension); convert it or rename it to `*.pdf`.
-- **No input / TTY** — `summarize` with no argument and a TTY stdin errors
-  instead of hanging; pass a file or `-`.
+  `"truncated": true`) — the prompt was likely truncated; see
+  [docs/troubleshooting.md](docs/troubleshooting.md) for the fix and the
+  streaming caveat.
+
+Everything else — PDFs and OCR, timeouts, context overflow, binary files, the
+no-input error — is in [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## When not to use this
 
@@ -439,10 +367,9 @@ Ollama but are untested here.
 wrong tool when being wrong is expensive:
 
 - **Anything where a wrong number or claim matters** — legal, medical,
-  financial, or safety-critical text. `--verify` is a grep for numbers and
-  `ACRONYM (expansion)` phrases, not fact-checking, and a clean report is not
-  proof. Treat `--format json` output as untrusted input at any automation
-  boundary ([docs/verify.md](docs/verify.md)).
+  financial, or safety-critical text. `--verify` is a grep, not fact-checking,
+  and a clean report is not proof. Treat `--format json` output as untrusted at
+  any automation boundary.
 - **Wide tables on a small model.** Structured table extraction fixes column
   *assignment*, not judgment; a 3B model can still garble an 8-column table.
 - **Documents that need reasoning across the whole text.** Map-reduce
@@ -455,31 +382,39 @@ wrong tool when being wrong is expensive:
 The honest state of summary quality, and why this list exists, is in
 [docs/quality.md](docs/quality.md).
 
+## How this differs from other tools
+
+Not better — different. `summarize` is a summarization pipeline with an
+explicit trust boundary, strict context budgeting, and validated output;
+general-purpose tools may fit better if you need chat, plugins, or cloud
+models. Claims below are from each project's own README.
+
+| Tool | What it is | How `summarize` differs |
+| --- | --- | --- |
+| `ollama run` | One prompt against a local model | No chunking, budgeting, trust boundary, or output validation |
+| [`llm`](https://github.com/simonw/llm) | CLI/Python for many models, remote and local (Ollama via a plugin), with SQLite logging, embeddings, schemas and tools | General-purpose; long-document summarization is on you |
+| [`fabric`](https://github.com/danielmiessler/fabric) | A library of reusable prompts ("Patterns", including `summarize`) over many providers, with a REST API | Prompt-library-first; `summarize` is pipeline-first and local-only |
+
+The differentiators, all verifiable here: the trusted/untrusted prompt
+boundary ([docs/design.md](docs/design.md)), budgeted chunking and map-reduce
+([docs/performance.md](docs/performance.md)), validated JSON with one repair
+retry ([docs/readers.md](docs/readers.md)), stdout/stderr discipline with
+stable exit codes ([docs/cli.md](docs/cli.md)), and `doctor`.
+
 ## Documentation
 
-The README is the orientation; the detail lives in [docs/](docs/index.md).
-
-| | |
-| --- | --- |
-| [Installation](docs/installation.md) | pipx, extras, releases, packaging |
-| [Configuration](docs/configuration.md) | precedence, project opt-in, every key, env vars, profiles |
-| [CLI reference](docs/cli.md) | commands, discovery, completions, exit status |
-| [Backends](docs/backends.md) | adapters and capability negotiation |
-| [Performance and local state](docs/performance.md) | progress, cancellation, concurrency, cache, stats |
-| [Readers](docs/readers.md) | inputs, PDF/OCR, provenance, JSON schema, limits |
-| [Claim verification](docs/verify.md) | `--verify`: what it checks, and what it misses |
-| [Sessions](docs/sessions.md) | named local run records |
-| [Design and safety](docs/design.md) | the trust boundary and aggregation |
-| [Security and privacy](docs/security.md) | local-only guarantees, local state |
-| [Evaluation](docs/evaluation.md) | the local evaluation harness |
-| [Summary quality](docs/quality.md) | the first manual claims benchmark (small, on a 3B model, with confounds) and its caveats |
+The README is the orientation; the detail lives in [docs/](docs/index.md):
+[Installation](docs/installation.md) · [Configuration](docs/configuration.md) ·
+[CLI](docs/cli.md) · [Backends](docs/backends.md) ·
+[Performance and local state](docs/performance.md) · [Readers](docs/readers.md) ·
+[Claim verification](docs/verify.md) · [Troubleshooting](docs/troubleshooting.md) ·
+[Sessions](docs/sessions.md) · [Design and safety](docs/design.md) ·
+[Security and privacy](docs/security.md) · [Evaluation](docs/evaluation.md) ·
+[Summary quality](docs/quality.md).
 
 ## Contributing, changelog, license
 
 - Contributing and the repository safety guard: [CONTRIBUTING.md](CONTRIBUTING.md).
-  The guard (`scripts/check_repo_safety.py`) is a network-free check that the
-  files git would commit contain no credentials, `.env` files, local config,
-  absolute home paths, or wildcard binds.
 - Version history: [CHANGELOG.md](CHANGELOG.md).
 - Design notes and deferred work: [ROADMAP.md](ROADMAP.md).
 - License: MIT — see [LICENSE](LICENSE).

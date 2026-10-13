@@ -46,6 +46,11 @@ it is, "released" means a git tag. Design notes and rationale live in
   is treated as a context overflow and retried with smaller chunks; after the
   retries the run warns, sets `truncated: true` in the JSON envelope, and exits
   0 (or fails under `--strict`).
+- **Docs:** the README was restructured and shortened (detail moved to
+  `docs/`, including a new `docs/troubleshooting.md`). It now shows a real
+  example summary, states that `doctor`'s reported window is state-dependent
+  (check `ollama ps`), and compares `summarize` with `llm`, `fabric`, and
+  `ollama run`.
 
 ## v0.6.0 — 2026-09-21
 
