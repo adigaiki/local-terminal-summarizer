@@ -22,15 +22,19 @@ an upload of that tag's artifacts to PyPI. Design notes and rationale live in
   a non-fatal `!` line naming both paths when a different `summarize` is first
   on `PATH`.
 - **`--dry-run` says when its context window is a guess.** With no configured
-  window the plan printed `context 8192 tokens (fallback)` and a chunk count as
-  if it were final, but a real run warms the model and plans from the *served*
-  window, which can differ enough to change the chunking. The plan now carries
-  a `note:` line saying the fallback window makes chunking provisional. An
-  explicit `[engine] context_length` is used as before and gets no note.
+  window the plan printed the fallback window and a chunk count as if it were
+  final, but a dry run contacts no backend and the served window may differ
+  from the fallback. The plan now carries a `note:` line saying the fallback
+  window makes chunking provisional. An explicit `[engine] context_length` is
+  used as before and gets no note.
 - **Metadata:** `authors` now names Aditya Gaikwad instead of "summarizer
   contributors" (no email added), and `LICENSE` carries the same holder. This
   shows up on the PyPI project page from 0.7.1; nothing in the installed
   package changes.
+- **Internal:** the repository safety guard flags filenames that start with a
+  dash (the stray file a mistyped `cmd > --flag` leaves behind), so the next one
+  is caught before it is committed. Development tool only; nothing in the
+  installed package changes.
 
 ## v0.7.0 — 2026-10-13
 
