@@ -132,6 +132,10 @@ FORBIDDEN_TRACKED_NAMES = {".env"}
 FORBIDDEN_TRACKED_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
 # Temporary artifacts that must not be committed.
 ARTIFACT_SUFFIXES = (".log", ".tmp", ".bak", ".orig", ".rej", ".prof")
+# A shell redirection that swallows an option (for example a mistyped
+# `cmd > --flag`) creates a file whose name starts with a dash; it is never
+# intended and is awkward to remove, so flag it by name.
+DASH_PREFIXED_NAME = "-"
 
 
 def _is_skipped_path(path: Path) -> bool:
@@ -240,6 +244,8 @@ def scan_file(path: Path) -> list[Finding]:
         findings.append(Finding(rel, 0, "forbidden-file", path.name))
     if lower.endswith(ARTIFACT_SUFFIXES):
         findings.append(Finding(rel, 0, "temp-artifact", path.name))
+    if path.name.startswith(DASH_PREFIXED_NAME):
+        findings.append(Finding(rel, 0, "dash-prefixed-name", path.name))
     findings = [f for f in findings if not _is_allowed(allowlist, rel, f.rule)]
 
     # Always continue to content scanning: allowlisting a *path* rule must not

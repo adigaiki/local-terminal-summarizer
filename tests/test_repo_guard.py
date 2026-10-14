@@ -82,6 +82,21 @@ def test_detects_forbidden_tracked_names(tmp_path, monkeypatch, name, rule):
     assert rule in rules
 
 
+def test_detects_a_dash_prefixed_filename(tmp_path, monkeypatch):
+    # A shell redirection that swallowed an option, e.g. `cmd > --flag`.
+    guard = _load_guard(monkeypatch, tmp_path)
+    stray = tmp_path / "--exit-status"
+    stray.write_text("", encoding="utf-8")
+
+    rules = {finding.rule for finding in guard.scan_file(stray)}
+    assert "dash-prefixed-name" in rules
+
+    monkeypatch.setattr(
+        guard, "_load_allowlist", lambda: [("--exit-status", "dash-prefixed-name")]
+    )
+    assert guard.scan_file(stray) == []
+
+
 def test_allowlisted_file_is_exempt(tmp_path, monkeypatch):
     guard = _load_guard(monkeypatch, tmp_path)
     allowed = tmp_path / "check_repo_safety.py"
