@@ -55,8 +55,11 @@
 
 The infrastructure is ahead of the evidence. The priority order is now:
 
-1. **Ship v0.6**: publish to PyPI, install with `pipx`, get a handful of real
-   users. Until people use it, more features are guesses.
+1. **Ship to PyPI** — **done in 0.7.0**: published as
+   `local-terminal-summarizer`, installed with `pipx install
+   local-terminal-summarizer` or `uv tool install local-terminal-summarizer`.
+   What remains open is adoption: a handful of real users. Until people use it,
+   more features are guesses.
 2. **Build one honest quality benchmark**: a handful of documents with
    human-written reference claims, scored for factual coverage and omission,
    run against two local models. Design and caveats:
