@@ -61,6 +61,11 @@ jobs:
         # files, and wildcard binds. See scripts/check_repo_safety.py.
         run: python scripts/check_repo_safety.py
 
+      - name: Documentation link check
+        # No network: relative README/docs links and heading anchors only.
+        # See scripts/check_doc_links.py.
+        run: python scripts/check_doc_links.py
+
       - name: CLI smoke tests
         # Local-only commands that need no engine: config validation and
         # shell-completion generation.
