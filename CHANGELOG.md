@@ -4,7 +4,7 @@ Notable changes per release. The project is pre-1.0; a release is a git tag plus
 an upload of that tag's artifacts to PyPI. Design notes and rationale live in
 [ROADMAP.md](ROADMAP.md).
 
-## Unreleased
+## v0.7.1 — 2026-10-14
 
 - **Docs-only:** [docs/installation.md](docs/installation.md) and the README
   install section now cover installing from PyPI (`pipx install
