@@ -1,8 +1,19 @@
 # Changelog
 
-Notable changes per release. The project is pre-1.0 and not yet on PyPI; until
-it is, "released" means a git tag. Design notes and rationale live in
+Notable changes per release. The project is pre-1.0; a release is a git tag plus
+an upload of that tag's artifacts to PyPI. Design notes and rationale live in
 [ROADMAP.md](ROADMAP.md).
+
+## Unreleased
+
+- **Docs-only:** [docs/installation.md](docs/installation.md) and the README
+  install section now cover installing from PyPI (`pipx install
+  local-terminal-summarizer`, `uv tool install`, or a virtualenv), and the
+  README carries a PyPI version badge.
+- **Docs-only:** the maintainer publishing section now says to upload the
+  artifacts attached to the GitHub release, verified against `SHA256SUMS`,
+  rather than a local build. Builds are not byte-reproducible, so a rebuild
+  would put different bytes on PyPI than the release.
 
 ## v0.7.0 — 2026-10-13
 

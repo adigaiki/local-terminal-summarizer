@@ -5,7 +5,7 @@ here.
 
 | Document | Contents |
 | --- | --- |
-| [Installation](installation.md) | installing from a checkout, optional extras, releases, packaging |
+| [Installation](installation.md) | installing from PyPI, optional extras, releases, packaging, publishing |
 | [Configuration](configuration.md) | layering and precedence, project opt-in, every config key, profiles, environment variables |
 | [CLI reference](cli.md) | commands, model/config/cache discovery, shell completions, exit status |
 | [Backends](backends.md) | the adapter interface, capability negotiation, supported local runtimes |

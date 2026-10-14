@@ -2,6 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![PyPI](https://img.shields.io/pypi/v/local-terminal-summarizer)](https://pypi.org/project/local-terminal-summarizer/)
 [![CI](https://github.com/adigaiki/local-terminal-summarizer/actions/workflows/ci.yml/badge.svg)](https://github.com/adigaiki/local-terminal-summarizer/actions/workflows/ci.yml)
 
 `summarize` is a Linux-and-macOS command-line summarizer that turns a file or
@@ -90,9 +91,30 @@ and the full schema are in
 
 ## Install
 
-Not on PyPI yet (planned distribution name: `local-terminal-summarizer`).
-Install from a checkout with
-[pipx](https://pipx.pypa.io/) (isolated, puts `summarize` on your `PATH`):
+```sh
+pipx install local-terminal-summarizer      # or: uv tool install local-terminal-summarizer
+```
+
+Both isolate the package and put `summarize` on your `PATH`. With neither,
+install into a virtualenv instead:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install local-terminal-summarizer
+.venv/bin/summarize --version
+```
+
+Uninstall with `pipx uninstall local-terminal-summarizer`,
+`uv tool uninstall local-terminal-summarizer`, or
+`python -m pip uninstall local-terminal-summarizer` in the virtualenv.
+
+The distribution is `local-terminal-summarizer`, the command is `summarize`,
+and the import package is `summarizer`. Optional extras (the base install
+stays dependency-free): `pipx install 'local-terminal-summarizer[pdf]'` for
+PDF text and `pipx install 'local-terminal-summarizer[ocr]'` for OCR, which
+also needs system `tesseract` and Poppler.
+
+### From a checkout (development)
 
 ```sh
 git clone https://github.com/adigaiki/local-terminal-summarizer.git
@@ -100,11 +122,8 @@ cd local-terminal-summarizer
 pipx install .            # or: uv tool install .
 ```
 
-From a virtualenv instead: `python3 -m venv .venv &&
-.venv/bin/python -m pip install -e '.[test]'`. Optional extras (the base
-install stays dependency-free): `pipx install '.[pdf]'` for PDF text and
-`pipx install '.[ocr]'` for OCR (which also needs system `tesseract` and
-Poppler). Uninstall with `pipx uninstall local-terminal-summarizer`.
+Or install editable into a virtualenv to track your edits:
+`python3 -m venv .venv && .venv/bin/python -m pip install -e '.[test]'`.
 
 Releases, packaging, and TestPyPI-first publishing are in
 [docs/installation.md](docs/installation.md).
