@@ -14,6 +14,13 @@ an upload of that tag's artifacts to PyPI. Design notes and rationale live in
   artifacts attached to the GitHub release, verified against `SHA256SUMS`,
   rather than a local build. Builds are not byte-reproducible, so a rebuild
   would put different bytes on PyPI than the release.
+- **`doctor` reports the running entry point.** The `executable:` line was
+  `shutil.which("summarize")`, i.e. whatever `summarize` came first on `PATH`,
+  which can be a different install than the one running (making the Python
+  version and extras in the same block look wrong). It now resolves the
+  running entry point, falling back to `sys.executable -m summarizer`, and adds
+  a non-fatal `!` line naming both paths when a different `summarize` is first
+  on `PATH`.
 
 ## v0.7.0 — 2026-10-13
 

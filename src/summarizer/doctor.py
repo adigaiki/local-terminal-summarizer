@@ -72,6 +72,30 @@ class DoctorReport:
         return all(check.ok for check in self.checks if not check.optional)
 
 
+def _resolved(path: str | Path) -> Path | None:
+    """Resolve `path` to a real absolute path, or None when it does not exist."""
+    try:
+        return Path(path).resolve(strict=True)
+    except OSError:
+        return None
+
+
+def _running_program() -> str:
+    """Best-effort path of the entry point that is actually running.
+
+    `summarize doctor` is also reachable as `python -m summarizer` and from a
+    test runner, so this stays narrow: report the resolved path only when
+    argv[0] is a real file other than the `-m` shim, and otherwise describe how
+    to run the package directly.
+    """
+    fallback = f"{sys.executable} -m summarizer"
+    argv0 = sys.argv[0] if sys.argv else ""
+    if not argv0 or Path(argv0).name == "__main__.py":
+        return fallback
+    resolved = _resolved(argv0)
+    return str(resolved) if resolved is not None else fallback
+
+
 def _check(
     name: str,
     ok: bool,
@@ -81,6 +105,35 @@ def _check(
     optional: bool = False,
 ) -> Check:
     return Check(name=name, ok=ok, message=message, hint=hint, detail=detail or [], optional=optional)
+
+
+def _installation_detail(python_version: str) -> list[str]:
+    """Installation detail lines: interpreter, version, and running entry point.
+
+    Reports the entry point that is actually running, not whatever `summarize`
+    is first on PATH: those can be different installs, and only the former
+    explains the Python version and extras reported here.
+    """
+    running = _running_program()
+    detail = [
+        f"python: {python_version}",
+        f"summarizer: {__version__}",
+        f"executable: {running}",
+    ]
+    on_path = shutil.which("summarize")
+    if on_path is not None:
+        on_path_resolved = _resolved(on_path)
+        running_resolved = _resolved(running)
+        if (
+            on_path_resolved is not None
+            and running_resolved is not None
+            and on_path_resolved != running_resolved
+        ):
+            detail.append(
+                f"! a different summarize is first on PATH: {on_path_resolved} "
+                f"(running: {running_resolved})"
+            )
+    return detail
 
 
 def _reader_checks() -> list[Check]:
@@ -179,16 +232,12 @@ def diagnose(
 
     # 2. Installation health (no network, no engine needed)
     python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    install_detail = [f"python: {python_version}", f"summarizer: {__version__}"]
-    executable = shutil.which("summarize")
-    if executable:
-        install_detail.append(f"executable: {executable}")
     checks.append(
         _check(
             "Installation",
             True,
             message=f"summarizer {__version__} on Python {python_version}",
-            detail=install_detail,
+            detail=_installation_detail(python_version),
         )
     )
 
