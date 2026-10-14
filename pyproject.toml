@@ -13,7 +13,7 @@ description = "A local-first, Unix-native terminal summarizer for local LLM serv
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-authors = [{ name = "summarizer contributors" }]
+authors = [{ name = "Aditya Gaikwad" }]
 keywords = ["summarize", "llm", "openai-compatible", "local-first", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",

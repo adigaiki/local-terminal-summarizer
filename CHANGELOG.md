@@ -27,6 +27,10 @@ an upload of that tag's artifacts to PyPI. Design notes and rationale live in
   window, which can differ enough to change the chunking. The plan now carries
   a `note:` line saying the fallback window makes chunking provisional. An
   explicit `[engine] context_length` is used as before and gets no note.
+- **Metadata:** `authors` now names Aditya Gaikwad instead of "summarizer
+  contributors" (no email added), and `LICENSE` carries the same holder. This
+  shows up on the PyPI project page from 0.7.1; nothing in the installed
+  package changes.
 
 ## v0.7.0 — 2026-10-13
 
