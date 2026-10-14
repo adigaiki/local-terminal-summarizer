@@ -24,6 +24,7 @@ from summarizer.config import (
     load_config,
     project_config_requested,
 )
+from summarizer.engine.capabilities import CONTEXT_SOURCE_FALLBACK
 from summarizer.errors import ConfigError
 from summarizer.log import Diagnostics
 from summarizer.pipeline import Pipeline, PipelineOptions
@@ -204,6 +205,37 @@ def test_dry_run_reports_config_source(tmp_path, monkeypatch):
     assert "Model:" in rendered
     assert "source:       user config (/tmp/config.toml)" in rendered
     assert "No LLM request" in rendered
+
+
+def test_dry_run_says_an_unconfigured_window_is_a_fallback(tmp_path, monkeypatch):
+    """A dry run contacts nothing, so it must not imply it knows the window."""
+    monkeypatch.setenv("SUMMARIZER_CONFIG", str(tmp_path / "absent.toml"))
+    source = tmp_path / "note.txt"
+    source.write_text("A short local note.", encoding="utf-8")
+    cfg = Config(engine=EngineSettings(model="m"))
+    report = Pipeline(cfg, diag=Diagnostics(quiet=True)).dry_run(
+        str(source), opts=PipelineOptions()
+    )
+    rendered = report.render()
+    assert f"({CONTEXT_SOURCE_FALLBACK})" in rendered
+    assert "fallback window" in rendered
+    assert "may chunk differently" in rendered
+    # The existing honesty lines stay.
+    assert "No network request" in rendered
+    assert "No LLM request" in rendered
+
+
+def test_dry_run_uses_a_configured_window_without_the_fallback_note(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUMMARIZER_CONFIG", str(tmp_path / "absent.toml"))
+    source = tmp_path / "note.txt"
+    source.write_text("A short local note.", encoding="utf-8")
+    cfg = Config(engine=EngineSettings(model="m", context_length=16384))
+    report = Pipeline(cfg, diag=Diagnostics(quiet=True)).dry_run(
+        str(source), opts=PipelineOptions()
+    )
+    rendered = report.render()
+    assert "16384 tokens (config)" in rendered
+    assert "fallback window" not in rendered
 
 
 def test_dry_run_redacts_endpoint_credentials(tmp_path):

@@ -21,6 +21,12 @@ an upload of that tag's artifacts to PyPI. Design notes and rationale live in
   running entry point, falling back to `sys.executable -m summarizer`, and adds
   a non-fatal `!` line naming both paths when a different `summarize` is first
   on `PATH`.
+- **`--dry-run` says when its context window is a guess.** With no configured
+  window the plan printed `context 8192 tokens (fallback)` and a chunk count as
+  if it were final, but a real run warms the model and plans from the *served*
+  window, which can differ enough to change the chunking. The plan now carries
+  a `note:` line saying the fallback window makes chunking provisional. An
+  explicit `[engine] context_length` is used as before and gets no note.
 
 ## v0.7.0 — 2026-10-13
 

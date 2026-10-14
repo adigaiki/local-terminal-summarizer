@@ -38,4 +38,6 @@ cannot express gets one small adapter class. There are no cloud providers.
   otherwise it is omitted with a verbose warning.
 - Context length is discovered from the local server when possible, then from
   `[engine] context_length`, then from a conservative fallback. The source is
-  reported by `summarize doctor` and `--dry-run`.
+  reported by `summarize doctor` and `--dry-run`. A `--dry-run` contacts no
+  backend, so it reports your configured value or the fallback; a real run
+  warms the model and reads the served window, which may chunk differently.

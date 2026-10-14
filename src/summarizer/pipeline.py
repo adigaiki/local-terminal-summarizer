@@ -28,7 +28,11 @@ from summarizer.chunking import (
 from summarizer.config import Config, EngineSettings, user_prompt_dir
 from summarizer.document import Document, read_source
 from summarizer.engine import Engine, EngineCapabilities, create_engine
-from summarizer.engine.capabilities import CONTEXT_SOURCE_CONFIG, DEFAULT_CONTEXT_LENGTH
+from summarizer.engine.capabilities import (
+    CONTEXT_SOURCE_CONFIG,
+    CONTEXT_SOURCE_FALLBACK,
+    DEFAULT_CONTEXT_LENGTH,
+)
 from summarizer.errors import ConfigError, ContextOverflow, InputError, TruncationDetected
 from summarizer.log import Diagnostics, redact_url
 from summarizer.net import is_loopback_url
@@ -178,6 +182,18 @@ class DryRunReport:
                 if isinstance(value, list):
                     value = f"{len(value)} entries: {value[:3]}{'...' if len(value) > 3 else ''}"
                 lines.append(f"  metadata.{key}: {value}")
+        # A dry run contacts nothing, so an unconfigured window is the fallback
+        # constant. Say so plainly: a real run warms the model and reads the
+        # served window, which can differ enough to change the chunk count.
+        budget = self.decision.budget
+        fallback_note: list[str] = []
+        if budget is not None and budget.context_source == CONTEXT_SOURCE_FALLBACK:
+            fallback_note = [
+                f"  note: {budget.context_tokens} tokens is a fallback window; no "
+                "backend was contacted, so the served window is unknown. A real "
+                "run warms the model, reads the served window, and may chunk "
+                "differently.",
+            ]
         lines += [
             "",
             f"Profile:        {self.profile.name} ({self.profile.source})",
@@ -196,6 +212,7 @@ class DryRunReport:
             f"Cache:          {self.cache_mode}",
             "",
             self.decision.describe(),
+            *fallback_note,
             f"Aggregation:    {self.aggregation.name} ({self.aggregation.reason})",
             "",
             "Prompt structure:",
